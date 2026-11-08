@@ -317,10 +317,12 @@ def ninja_file(gen, out, mods, pool_depth, skip=(), prebuilt=False, runtime_lib=
     """build.ninja text, and the object lists per module. With prebuilt the generated objects already exist in
     out/obj and are link inputs without a compile edge. runtime_lib: a prebuilt library replaces the runtime objects
     except INSTALL_SIDE. make_lib: build only that library, from the runtime objects except INSTALL_SIDE."""
+    from prepare_lua import prepare
+    lua = prepare(out / 'lua')
     inc = f'-I {cmd_path(RUNTIME)} -I {cmd_path(gen)}'
     vma = f'{cmd_path(DEPS / "include")} -I {cmd_path(DEPS / "include" / "vma")}' if DEPS else cmd_path(vma_include())
     imgui = cmd_path(RUNTIME / 'third_party' / 'imgui')
-    rt_inc = f'{inc} -I {cmd_path(out)} -I {vma} -I {imgui}'   # romfs_config.h, vk_mem_alloc.h (+ deps headers), imgui.h
+    rt_inc = f'{inc} -I {cmd_path(out)} -I {vma} -I {imgui} -I {cmd_path(lua)}'   # romfs_config.h, vk_mem_alloc.h (+ deps headers), imgui.h
     libs = [f'-L {cmd_path(DEPS / "lib")}'] + (LLVM_LINK_LIBS if WIN else LINK_LIBS) if DEPS else LINK_LIBS
     lines = [
         '# Written by tools/build_game.py; do not edit.',
@@ -369,6 +371,9 @@ def ninja_file(gen, out, mods, pool_depth, skip=(), prebuilt=False, runtime_lib=
             objs[mod].append(o)
     rt = []
     sources = runtime_sources(skip)
+    lua_libs = {'lauxlib.c', 'lbaselib.c', 'lstrlib.c', 'ltablib.c', 'lmathlib.c'}
+    sources += sorted(p for p in lua.glob('*.c') if p.name not in {'lua.c', 'luac.c', 'linit.c'}
+                      and (not p.name.endswith('lib.c') or p.name in lua_libs))
     if make_lib:
         sources = [p for p in sources if p.name not in INSTALL_SIDE]
     elif runtime_lib:
