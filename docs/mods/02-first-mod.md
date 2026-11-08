@@ -4,7 +4,7 @@ This complete example adds a saved checkbox, a transient button and a read-only 
 
 ## Install the files
 
-Copy [examples/mods/hello](../../examples/mods/hello) into `mods/hello` beside the executable. The script and manifest are complete; no generated game files or native library are needed.
+Create `mods/hello` beside the executable, then copy [examples/mods/hello](../../examples/mods/hello) into it. You can also create `mod.ini` and `main.lua` yourself using the complete text below. Save them as plain UTF-8 text without a byte-order mark (BOM) with those exact filenames; check that your editor hasn't added `.txt`. You don't need game assets, a compiler or a native library.
 
 ```text
 <instance>/
@@ -55,13 +55,13 @@ return {
 }
 ```
 
- Its init function registers the page; the `ui.action` handler increments a session-only counter, and `settings.changed` reports the new checkbox value. Required init/shutdown functions and the startup event are supplied.
+The init function registers your page; the `ui.action` handler increments a session-only counter, and `settings.changed` reports the new checkbox value. Required init/shutdown functions and the startup event are supplied.
 
-Append a line `hello` to both `mods/catalog.txt` and `mods/enabled.txt`, preserving other entries. Restart. Open F1/Esc → Mods → **Hello workshop**. Click **Say hello**: the line changes to `Hello! Clicks this run: 1`. Change **Show hints** and wait for Saved. Close/reopen the overlay: the setting remains. Restarting loads the saved checkbox and resets the transient click counter. If saving fails, the existing Retry save control retries persistence without repeating the change callback.
+Create `mods/catalog.txt` and `mods/enabled.txt` if they don't exist. Add a line containing only `hello` to each file, keeping any other entries. Close the whole process if it's running, then start it again. Open F1/Esc → Mods → **Hello workshop**. Click **Say hello**: the line changes to `Hello! Clicks this run: 1`. Change **Show hints** and wait for Saved. Close/reopen the overlay: the setting remains. Restarting loads the saved checkbox and resets the transient click counter. If saving fails, the existing Retry save control retries persistence without repeating the change callback.
 
 Catalog discovery is separate from activation. A catalogued package appears in the list even when disabled. `enabled.txt` explicitly activates source packages at startup. An enabled package can be discovered without a catalog line, but cataloguing disabled installed packages lets the list explain their status. There is no enable/disable management UI yet: edit activation files while closed and restart. Missing, incompatible and faulted packages show diagnostics; a package that cannot be discovered cannot display a page.
 
-The default root is `mods` beside the executable. A bounded absolute `XCX_MOD_DIR` can select another source root; per-instance settings still live outside the package in the instance's mod-settings directory. Keep executable folders/settings/logs and explicit profiles separate when testing multiple games.
+The default root is `mods` beside the executable. A bounded absolute `XCX_MOD_DIR` can select another source root; saved mod settings still live beside that executable in `mod-settings`, even when you choose another `--profile`. Different save profiles sharing one executable also share these mod settings. Keep executable folders/settings/logs and explicit profiles separate when testing multiple games.
 
 ## Settings and actions
 
@@ -77,4 +77,6 @@ Open F1/Esc → Mods and select the package for its status and bounded diagnosti
 
 ## Update or disable
 
-Close the game before changing source packages. Replace only package files, preserve `mod-settings`, executable settings, profiles and logs, then restart. Removing `hello` from enabled.txt disables its Lua state; retaining the catalog entry keeps it listed as Disabled. Never replace a profile as part of installing a Lua mod. UI/events provide no game-save editing API.
+Close the entire game process before changing scripts, activation lists or native libraries. Closing only the overlay does not reload them. Replace only package files, preserve `mod-settings`, executable settings, profiles and logs, then restart. Removing `hello` from enabled.txt disables its Lua state; retaining the catalog entry keeps it listed as Disabled. Never replace a profile as part of installing a Lua mod. UI/events provide no game-save editing API.
+
+If you disable this example, remove only its `hello` line from `enabled.txt`, keep it in `catalog.txt`, and restart. It should appear as Disabled. Its saved checkbox stays in `mod-settings/hello.ini`; enable it and restart to use that value again. Examples installed under `examples/` are not activated automatically.

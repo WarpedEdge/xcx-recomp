@@ -1,6 +1,6 @@
 # 01 · Start Here
 
-Start with a working executable built with experimental Lua mod support. Use a separate test installation/profile for authoring. Your package files and saved preferences have separate locations; updating a package does not require replacing your profile.
+You need a working executable built with Lua mod support, a plain-text editor and a separate installation for testing. Use the bundled `examples/mods/hello` files or copy the complete example in the next guide. Your package and saved preferences have separate folders, so you can update a mod without replacing your profile.
 
 ## Pick what you want to make
 

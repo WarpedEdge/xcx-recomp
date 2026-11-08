@@ -2,7 +2,7 @@
 
 ## Versions and capabilities
 
-The package manifest requires `api=1`, `language=lua55-basic-v1` and a three-component numeric package version. Settings schema 1 and optional action declarations use the existing Lua API 1. Menu registration has its own explicit version 1 and location `online`. Native lifecycle ABI 1.0 and command/status ABI 2.0 are distinct exact-version C interfaces; neither silently falls back. Provider manifest schema 2 optionally requires the generic host-service and actual game version. Source-only packages have no native ABI/build requirement.
+The package manifest requires `api=1`, `language=lua55-basic-v1` and a three-component numeric package version. Settings schema 1 and optional action declarations use the existing Lua API 1. Menu registration has its own explicit version 1 and location `online`. Native lifecycle ABI 1.0 and command/status ABI 2.0 are distinct exact-version C interfaces; neither silently falls back. Provider manifest schema 2 requires the generic host-service and actual game version when you select that schema. Schema 1 does not carry those compatibility fields. Source-only packages have no native ABI/build requirement.
 
 | Capability | Status in this candidate | Boundary |
 | --- | --- | --- |
@@ -29,4 +29,4 @@ The Lua implementation is 5.5.1 with four recorded upstream fixes applied to a b
 - **Provider unavailable:** enable the Lua package and its separate owner/provider association, verify manifest hashes/ABI/platform requirements and restart. Native libraries are trusted code, not sandboxed Lua.
 - **Wrong page or stale input:** close/reopen normally and inspect the owner/page IDs. Do not add a private input stack or retain guest controller pointers.
 
-Linux tests and owner observations do not prove Windows support or cross-platform play. Exact candidate acceptance, outstanding limits and commands are in the internal consolidated report; no original installation or shared profile is updated by these examples.
+Linux tests and owner observations do not prove Windows support or cross-platform play. Keep your test installation separate from your normal one. The examples don't update an existing installation or replace its profile.
