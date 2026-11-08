@@ -1,0 +1,76 @@
+# 02 · First mod
+
+This complete example adds a saved checkbox, a transient button and a read-only status line. It uses only portable Lua source.
+
+## Install the files
+
+Copy [examples/mods/hello](../../examples/mods/hello) into `mods/hello` beside the executable. The script and manifest are complete; no generated game files or native library are needed.
+
+```text
+<instance>/
+  xcx                     # xcx.exe on Windows
+  mods/
+    catalog.txt
+    enabled.txt
+    hello/
+      mod.ini
+      main.lua
+  mod-settings/hello.ini  # created by settings persistence, outside the package
+```
+
+`mod.ini`:
+
+```ini
+id=hello
+name=Hello workshop
+version=0.1.0
+api=1
+language=lua55-basic-v1
+requires=
+```
+
+`main.lua` (also available as [source](../../examples/mods/hello/main.lua)):
+
+```lua
+local clicks=0
+return {
+ init=function()
+  host.settings.register {
+   version=1,id='preferences',title='Hello workshop',
+   fields={{id='hints',label='Show hints',type='bool',default=true}},
+   actions={{id='greet',label='Say hello'}}
+  }
+  host.ui.status('Choose Say hello.')
+ end,
+ events={
+  ['host.started']=function() host.log('Hello workshop loaded') end,
+  ['settings.changed']=function(e)
+   host.ui.status('Show hints: '..tostring(e.value))
+  end,
+  ['ui.action']=function(e)
+   if e.action=='greet' then clicks=clicks+1;host.ui.status('Hello! Clicks this run: '..tostring(clicks)) end
+  end
+ },
+ shutdown=function() end
+}
+```
+
+ Its init function registers the page; the `ui.action` handler increments a session-only counter, and `settings.changed` reports the new checkbox value. Required init/shutdown functions and the startup event are supplied.
+
+Append a line `hello` to both `mods/catalog.txt` and `mods/enabled.txt`, preserving other entries. Restart. Open F1/Esc → Mods → **Hello workshop**. Click **Say hello**: the line changes to `Hello! Clicks this run: 1`. Change **Show hints** and wait for Saved. Close/reopen the overlay: the setting remains. Restarting loads the saved checkbox and resets the transient click counter. If saving fails, the existing Retry save control retries persistence without repeating the change callback.
+
+Catalog discovery is separate from activation. A catalogued package appears in the list even when disabled. `enabled.txt` explicitly activates source packages at startup. An enabled package can be discovered without a catalog line, but cataloguing disabled installed packages lets the list explain their status. There is no enable/disable management UI yet: edit activation files while closed and restart. Missing, incompatible and faulted packages show diagnostics; a package that cannot be discovered cannot display a page.
+
+The default root is `mods` beside the executable. A bounded absolute `XCX_MOD_DIR` can select another source root; per-instance settings still live outside the package in the instance's mod-settings directory. Keep executable folders/settings/logs and explicit profiles separate when testing multiple games.
+
+## Settings and actions
+
+Settings schema 1 supports bool, bounded integer and enum fields, at most eight fields and eight options per enum. Values are all-or-default validated at startup. Unsafe/rejected files are not silently overwritten. Stable mod/field/option IDs preserve preferences across compatible source updates.
+
+Actions are optional declarations on the same page, at most four, with stable IDs and bounded labels. They are transient FIFO requests and never saved as toggles. `host.ui.status(text)` copies a bounded read-only line; `host.ui.enable(id, boolean)` enables your own button. A script-only action needs no provider. See the runnable example and [action contract](../provider-actions.md).
+
+A page with only actions can declare `fields={}`. Provider-gated actions use `provider=true`, but need an explicitly trusted native association to become available. Use typed command IDs described by that provider; don't encode an address or structured message into an unrelated scalar.
+
+## Update or disable
+
+Close the game before changing source packages. Replace only package files, preserve `mod-settings`, executable settings, profiles and logs, then restart. Removing `hello` from enabled.txt disables its Lua state; retaining the catalog entry keeps it listed as Disabled. Never replace a profile as part of installing a Lua mod. UI/events provide no game-save editing API.
