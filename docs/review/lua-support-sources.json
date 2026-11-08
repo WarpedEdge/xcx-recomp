@@ -1330,5 +1330,19 @@
       "accepted_sha256": "195f66de58d2d4c02b995970e7888389138005c3a044248a29a98ac4bbc5b2f5",
       "prepared_sha256": "529b037749169b38b3b76797a10f6740e853b75abc1e63ba2bae79de8c9744e9"
     }
+  },
+  "git_normalization": {
+    "tests/actions/windows-check.ps1": {
+      "git_blob_sha256": "885797ea321070a646e8b24775bb665248c7e1afb601b061a57ab2a82b2aad21",
+      "checkout": "CRLF per existing .gitattributes; Git blob stores LF"
+    },
+    "tests/menu/windows-check.ps1": {
+      "git_blob_sha256": "1288eb9f86e238007dad976c7e87b2022a0f80856e6a1354f6c34f3bd5170316",
+      "checkout": "CRLF per existing .gitattributes; Git blob stores LF"
+    },
+    "tests/providers/windows-check.ps1": {
+      "git_blob_sha256": "e459b3469ed1819b80940493c5fec26633b9d4eb9b3ca45caca39311cf0ec89d",
+      "checkout": "CRLF per existing .gitattributes; Git blob stores LF"
+    }
   }
 }
