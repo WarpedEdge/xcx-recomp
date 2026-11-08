@@ -20,3 +20,7 @@ void plat_cond_wait(PlatCond *c,PlatMutex *m) { (void)c; (void)m; pthread_cond_w
 void plat_cond_broadcast(PlatCond *c) { (void)c; pthread_cond_broadcast(&condition); }
 void plat_sleep_ms(uint32_t ms) { struct timespec t={ms/1000,(long)(ms%1000)*1000000}; nanosleep(&t,NULL); }
 int plat_exe_path(char *out,size_t cap) { (void)out; (void)cap; return 0; }
+
+int plat_cond_wait_ns(PlatCond *c,PlatMutex *m,uint64_t ns) {
+    (void)c;(void)m;struct timespec t;clock_gettime(CLOCK_REALTIME,&t);t.tv_sec+=(time_t)(ns/1000000000);t.tv_nsec+=(long)(ns%1000000000);if(t.tv_nsec>=1000000000){++t.tv_sec;t.tv_nsec-=1000000000;}return !pthread_cond_timedwait(&condition,&mutex,&t);
+}

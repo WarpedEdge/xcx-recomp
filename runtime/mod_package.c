@@ -87,9 +87,10 @@ static int manifest(ModPackage *m,char *s,size_t size) {
             char *value=strchr(line,'='); if (!value) return 0; *value++=0;
             unsigned field=0;
             if (!strcmp(line,"id")) { field=1; if (strcmp(value,m->id)) return 0; }
-            else if (!strcmp(line,"api")) { field=2; if (strcmp(value,"1")) return 0; }
-            else if (!strcmp(line,"language")) { field=4; if (strcmp(value,"lua55-basic-v1")) return 0; }
-            else if (!strcmp(line,"version")) { field=8; if (!version(value)) return 0; strcpy(m->version,value); }
+            else if (!strcmp(line,"api")) { field=2; if (strcmp(value,"1")) {strcpy(m->diagnostic,"Incompatible API: this host requires api=1.");return 0;} }
+            else if (!strcmp(line,"language")) { field=4; if (strcmp(value,"lua55-basic-v1")) {strcpy(m->diagnostic,"Incompatible language: requires lua55-basic-v1.");return 0;} }
+            else if (!strcmp(line,"version")) { field=8; if (!version(value)) {strcpy(m->diagnostic,"Invalid package version; expected three numeric components.");return 0;} strcpy(m->version,value); }
+            else if (!strcmp(line,"name")) { field=32; if (!*value || strlen(value)>96) return 0; strcpy(m->name,value); }
             else if (!strcmp(line,"requires")) {
                 field=16;
                 while (*value) {
@@ -111,7 +112,7 @@ static int manifest(ModPackage *m,char *s,size_t size) {
 ModPlan *mod_packages_read(const char *root,ModLog log) {
     size_t length=0;
     char *enabled=snapshot(root,NULL,"enabled.txt",2048,&length);
-    if (!enabled) { if (length) diagnostic(log,"enabled.txt","unsafe, unreadable or oversized configuration; no packages loaded"); return NULL; }
+    if (!enabled) { if (length) {diagnostic(log,"enabled.txt","unsafe, unreadable or oversized configuration; no packages loaded");return NULL;} enabled=calloc(1,1);length=0;if(!enabled)return NULL; }
     if (memchr(enabled,0,length)) { diagnostic(log,"enabled.txt","embedded NUL; no packages loaded"); free(enabled); return NULL; }
     ModPlan *plan=calloc(1,sizeof *plan); if (!plan) { free(enabled); return NULL; }
     for (char *line=enabled;line;) {
@@ -130,29 +131,57 @@ ModPlan *mod_packages_read(const char *root,ModLog log) {
         line=next;
     }
     free(enabled);
+    // Optional bounded inventory: absent IDs are displayed as disabled, never executed.
+    char *catalog=snapshot(root,NULL,"catalog.txt",2048,&length);
+    if (catalog && !memchr(catalog,0,length)) {
+        for (char *line=catalog;line;) {
+            char *next=strchr(line,'\n'); if(next)*next++=0;
+            size_t n=strlen(line);if(n&&line[n-1]=='\r')line[--n]=0;
+            if (identifier(line)) {
+                int present=0;for(int i=0;i<plan->count;++i) if(!strcmp(plan->mods[i].id,line))present=1;
+                if(!present && plan->count<MOD_LIMIT) {ModPackage *m=&plan->mods[plan->count++];strcpy(m->id,line);m->enabled=-1;}
+            }
+            line=next;
+        }
+    }
+    free(catalog);
+    for(int i=0;i<plan->count;++i) plan->mods[i].enabled=plan->mods[i].enabled!=-1;
     // Lexical tie-breaking is independent of directory enumeration and enabled-file order.
     for (int i=0;i<plan->count;++i) for (int j=i+1;j<plan->count;++j) if (strcmp(plan->mods[i].id,plan->mods[j].id)>0) { ModPackage temp=plan->mods[i]; plan->mods[i]=plan->mods[j]; plan->mods[j]=temp; }
     for (int i=0;i<plan->count;++i) {
         ModPackage *m=&plan->mods[i]; if (m->rejected) continue;
         char *text=snapshot(root,m->id,"mod.ini",4096,&length);
-        if (!text || !manifest(m,text,length)) { m->rejected=1; diagnostic(log,m->id,"invalid manifest/API/language/version"); }
-        free(text); if (m->rejected) continue;
+        if (!text || !manifest(m,text,length)) { m->rejected=1; if(!m->diagnostic[0])strcpy(m->diagnostic,"invalid manifest/API/language/version");diagnostic(log,m->id,m->diagnostic); }
+        free(text);
+        if (m->rejected || !m->enabled) {
+            ModView view={0};strcpy(view.id,m->id);snprintf(view.name,sizeof view.name,"%s",m->name[0]?m->name:m->id);strcpy(view.version,m->version);
+            view.status=m->enabled?MOD_INCOMPATIBLE:MOD_DISABLED;
+            snprintf(view.diagnostic,sizeof view.diagnostic,"%s",m->enabled?"Manifest/API/language/version rejected":"Not enabled; restart after editing enabled.txt.");mod_ui_publish(&view);
+            m->rejected=1;continue;
+        }
         m->source=snapshot(root,m->id,"main.lua",MOD_SOURCE_LIMIT,&m->source_size);
-        if (!m->source || (m->source_size && (unsigned char)m->source[0]==27)) { m->rejected=1; diagnostic(log,m->id,"missing/unsafe/oversized source or bytecode"); }
+        if (!m->source || (m->source_size && (unsigned char)m->source[0]==27)) { m->rejected=1; strcpy(m->diagnostic,"missing/unsafe/oversized source or bytecode");diagnostic(log,m->id,m->diagnostic); }
     }
     for (int pass=0;pass<plan->count;++pass) for (int i=0;i<plan->count;++i) {
         ModPackage *m=&plan->mods[i]; if (m->rejected) continue;
         for (int d=0;d<m->require_count;++d) {
             int found=-1;
             for (int j=0;j<plan->count;++j) if (!strcmp(m->requires[d],plan->mods[j].id) && !plan->mods[j].rejected) found=j;
-            if (found<0) { m->rejected=1; diagnostic(log,m->id,"required package absent/disabled/rejected"); break; }
+            if (found<0) { m->rejected=1; strcpy(m->diagnostic,"required package absent/disabled/rejected");diagnostic(log,m->id,m->diagnostic); break; }
             m->dependencies|=1u<<found;
         }
     }
     // Preserve original indexes for dependency masks; core uses this topological order.
     unsigned ready=0;
     for (int pass=0;pass<plan->count;++pass) for (int i=0;i<plan->count;++i) if (!plan->mods[i].rejected && (plan->mods[i].dependencies&ready)==plan->mods[i].dependencies) ready|=1u<<i;
-    for (int i=0;i<plan->count;++i) if (!plan->mods[i].rejected && !(ready&(1u<<i))) { plan->mods[i].rejected=1; diagnostic(log,plan->mods[i].id,"dependency cycle or blocked by cycle"); }
+    for (int i=0;i<plan->count;++i) if (!plan->mods[i].rejected && !(ready&(1u<<i))) { plan->mods[i].rejected=1; strcpy(plan->mods[i].diagnostic,"dependency cycle or blocked by cycle");diagnostic(log,plan->mods[i].id,plan->mods[i].diagnostic); }
+    for(int i=0;i<plan->count;++i) {
+        ModPackage *m=&plan->mods[i];ModView view={0};strcpy(view.id,m->id);snprintf(view.name,sizeof view.name,"%s",m->name[0]?m->name:m->id);strcpy(view.version,m->version);
+        view.status=!m->enabled?MOD_DISABLED:m->rejected?MOD_INCOMPATIBLE:MOD_STARTING;
+        if(view.status==MOD_DISABLED) strcpy(view.diagnostic,"Not enabled. Changes require restart.");
+        if(view.status==MOD_INCOMPATIBLE) snprintf(view.diagnostic,sizeof view.diagnostic,"%s",m->diagnostic[0]?m->diagnostic:"Package rejected; see log.");
+        mod_ui_publish(&view);
+    }
     if (!ready) { mod_packages_free(plan); return NULL; }
     return plan;
 }

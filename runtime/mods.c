@@ -23,13 +23,24 @@ static void worker(void *unused) {
     // This event means host mod startup, not game readiness or a guest scheduler point.
     while (!cancelled() && mod_runtime_event(runtime,cancelled)) plat_sleep_ms(1);
     plat_mutex_lock(&lock); ready=1; plat_cond_broadcast(&condition);
-    while (!cancelled()) plat_cond_wait(&condition,&lock);
+    while (!cancelled()) {
+        plat_mutex_unlock(&lock);
+        int processed=mod_runtime_actions(runtime,cancelled);
+        plat_mutex_lock(&lock);
+        if(!cancelled()) plat_cond_wait_ms(&condition,&lock,processed?1:100);
+    }
     plat_mutex_unlock(&lock);
     mod_runtime_stop(runtime);
 }
 void rt_mods_start(void) {
     if (started) return;
     started=1;
+    char settings[4096]={0};
+    if(plat_exe_path(settings,sizeof settings)) {
+        char *s=strrchr(settings,'/'),*b=strrchr(settings,'\\');if(b&&(!s||b>s))s=b;
+        if(s && (size_t)(s-settings)+14<sizeof settings)strcpy(s+1,"mod-settings");else settings[0]=0;
+    }
+    mod_ui_reset(settings);
     char root[4096]; const char *configured=getenv("XCX_MOD_DIR");
     if (configured) {
 #ifdef _WIN32
@@ -55,6 +66,7 @@ void rt_mods_start(void) {
 }
 void rt_mods_shutdown(void) {
     plat_mutex_lock(&lock);
+    mod_ui_shutdown();
     atomic_store_explicit(&stopping,1,memory_order_release); plat_cond_broadcast(&condition);
     // Script API cannot request exit; retain this guard for native exit callers on our thread.
     if (worker_id && worker_id==plat_thread_id()) { plat_mutex_unlock(&lock); return; }
@@ -65,4 +77,9 @@ void rt_mods_shutdown(void) {
     plat_thread_join(joining); // No host lock is held while a callback finishes.
     mod_packages_free(plan);
     plat_mutex_lock(&lock); plan=NULL; thread=NULL; closing=0; plat_cond_broadcast(&condition); plat_mutex_unlock(&lock);
+}
+
+int rt_mods_ui_submit(const ModAction *action) {
+    if(cancelled() || !mod_ui_submit(action))return 0;
+    plat_mutex_lock(&lock);plat_cond_broadcast(&condition);plat_mutex_unlock(&lock);return 1;
 }

@@ -1,7 +1,7 @@
-#include "../mods.h"
 // Linux implementation of platform.h: pthreads, CLOCK_MONOTONIC, futex locks and condition variables, POSIX files,
 // /proc and sysfs for the load counters, posix_spawn for child processes.
 #define _GNU_SOURCE
+#include "../mods.h"
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>

@@ -21,9 +21,12 @@
 #include "backends/imgui_impl_vulkan.h"
 #include "ui/binds_page.h"
 #include "ui/option_rows.h"
+#include "ui/mods_page.h"
 
 extern "C" {
 #include "cfg.h"
+#include "mods.h"
+#include "mod_settings.h"
 #include "input.h"
 #include "input_map.h"
 #include "input_wsys.h"
@@ -66,6 +69,7 @@ static int change_open(int want) {
     int open = want < 0 ? !g_open.load() : want;
     if (g_open.load() != open) {
         g_open.store(open);
+        if(!open)mod_ui_interaction(0);
         g_reset.store(1);
         input_menu(open);
         rt_log("menu: %s", open ? "open" : "closed");
@@ -300,6 +304,7 @@ static int fonts_up(float scale) {
 }
 
 extern "C" void menu_vk_release(void) {
+    mod_ui_interaction(0);
     if (g_ctx_ok) vk_down();
 }
 
@@ -310,7 +315,7 @@ extern "C" void menu_vk_release(void) {
 // XCX_MENU_TEST_SET=<frame>:<key>=<value>[,<key>=<value>...][;<frame>:...]: cfg_set of each key (XCX_ prefix
 // optional) at that presented frame; changes live settings with no input, menu open or not. xcx.ini is written only by
 // the pseudo-key SAVE=1 (cfg_save, as a row change does; a failed write shows the menu's save note).
-enum { TAB_SCREEN, TAB_GAME, TAB_SOUND, TAB_CONTROLS, TAB_MENU, TAB_ADVANCED, TAB_COUNT };
+enum { TAB_SCREEN, TAB_GAME, TAB_SOUND, TAB_CONTROLS, TAB_MENU, TAB_ADVANCED, TAB_MODS, TAB_COUNT };
 enum { TEST_PAGE_FRAMES = 30, TEST_SETS = 16 };
 struct TestSet { uint64_t frame; char key[64], value[64]; };
 static struct {
@@ -766,7 +771,7 @@ static void tab_advanced(float scale) {
 }
 
 static const UiTextId kTabNames[TAB_COUNT] = {UI_MENU_TAB_SCREEN, UI_MENU_TAB_GAME, UI_MENU_TAB_SOUND,
-                                              UI_MENU_TAB_CONTROLS, UI_MENU_TAB_MENU, UI_MENU_TAB_ADVANCED};
+                                              UI_MENU_TAB_CONTROLS, UI_MENU_TAB_MENU, UI_MENU_TAB_ADVANCED, UI_MENU_TAB_MODS};
 static int g_tab;               // the tab shown
 static int g_tab_request = -1;  // select this tab at the next layout; -1 none
 static int g_focus_page = -1;   // this tab's first row takes the cursor once it is shown; -1 none
@@ -788,6 +793,7 @@ enum { TEXT_CASE = -1, TEXT_BACKSPACE = -2, TEXT_OK = -3, TEXT_CANCEL = -4, TEXT
 
 extern "C" void menu_text_begin(const char *prompt, const char *initial, int max_len, int min_len, uint32_t disabled,
                                 int digits_only) {
+    mod_ui_interaction(0);
     plat_mutex_lock(&text_lock);
     snprintf(g_text_prompt, sizeof g_text_prompt, "%s", prompt);
     snprintf(g_text_buf, sizeof g_text_buf, "%s", initial);
@@ -1093,7 +1099,8 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - ImGui::CalcTextSize(version).x);
     ImGui::TextDisabled("%s", version);
 
-    int step = g_modal || binds_modal()                                                                  ? 0
+    bool popup_was_open=ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId);
+    int step = g_modal || binds_modal() || popup_was_open                                                                  ? 0
              : ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || ImGui::IsKeyPressed(ImGuiKey_E, false) ? 1
              : ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) || ImGui::IsKeyPressed(ImGuiKey_Q, false) ? -1
                                                                                                          : 0;
@@ -1108,7 +1115,8 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
             snprintf(label, sizeof label, "  %s  ###tab%d", menu_text(kTabNames[k]), k);   // the id stays per language
             if (!ImGui::BeginTabItem(label, nullptr, g_tab_request == k ? ImGuiTabItemFlags_SetSelected : 0)) continue;
             g_tab = k;
-            if (g_focus_page == k) {
+            bool focus_page = g_focus_page == k;
+            if (focus_page) {
                 opt_focus_first();
                 g_focus_page = -1;
             }
@@ -1124,6 +1132,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
             case TAB_CONTROLS: tab_controls(scale); break;
             case TAB_MENU: tab_menu(scale); break;
             case TAB_ADVANCED: tab_advanced(scale); break;
+            case TAB_MODS: mods_page(scale,bottom,focus_page); break;
             }
             ImGui::EndTabItem();
         }
@@ -1131,6 +1140,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
         ImGui::EndTabBar();
     }
 
+    if(g_tab!=TAB_MODS)mod_ui_interaction(0);
     // bottom row: the save status on the left, the two buttons on the right
     ImGui::Spacing();
     float y = ImGui::GetCursorPosY();
@@ -1144,7 +1154,7 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
     if (ImGui::Button(cont, ImVec2(bw, 0))) set_open(0);
     ImGui::SameLine();
     if (ImGui::Button(quit, ImVec2(bw, 0))) gfx_window_request_close();
-    bool was_modal = g_modal || binds_modal();
+    bool was_modal = g_modal || binds_modal() || popup_was_open;
     if (g_tab != TAB_ADVANCED) g_modal = false;
     if (!was_modal && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)))
         set_open(0);
@@ -1405,6 +1415,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     perf_tick(plat_now_ns(), t);
     bool open = g_open.load(std::memory_order_relaxed);
     bool text = g_text.load(std::memory_order_acquire);
+    if(!open || text || g_failed_flag())mod_ui_interaction(0);
     if (!open && !text) {
         if (g_save_pending) g_save_pending = opt_save_tick(1);   // closed: the last change goes to xcx.ini now
         if (g_test.at && !g_test.opened && frame >= g_test.at) {
@@ -1427,6 +1438,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     if (!vk_up(t) || (g_font_scale != scale && !fonts_up(scale))) {
         rt_log("menu: Dear ImGui Vulkan back end set-up failed; the menu stays closed");
         g_failed.store(1);
+        mod_ui_interaction(0);
         set_open(0);
         return 0;
     }
