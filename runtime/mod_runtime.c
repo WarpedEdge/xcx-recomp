@@ -1,5 +1,6 @@
 // Serialized Lua host domain. Source and event data are copied; no engine ABI is exposed.
 #include "mod_internal.h"
+#include "mod_provider.h"
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
@@ -20,10 +21,17 @@ typedef struct {
 } ModState;
 struct ModRuntime {
     ModPlan *plan;
+    ModProviders *providers;
     ModLog log;
     ModState states[MOD_LIMIT];
     int order[MOD_LIMIT], count, aggregate, event_cursor;
 };
+static void retire_native(ModState *m) {
+    ModProviderToken token;uint64_t native_owner=(uint64_t)(m->package-m->runtime->plan->mods)+1;
+    if(mod_providers_token(m->runtime->providers,native_owner,&token)&&!mod_providers_stop_owner(m->runtime->providers,native_owner,token)) {
+        m->runtime->log("providers: fatal owner cleanup failure; Lua state retained");abort();
+    }
+}
 static const char *phase_names[]={"state","setup","load","chunk","descriptor","init","event","shutdown","close","settings"};
 static ModState *owner(lua_State *L) { return *(ModState **)lua_getextraspace(L); }
 static void message(ModState *m,const char *kind,const char *s,size_t n) {
@@ -34,7 +42,7 @@ static void message(ModState *m,const char *kind,const char *s,size_t n) {
     line[at]=0; m->runtime->log(line);
     if(!strcmp(kind,"error")) {m->view.status=MOD_FAULTED;snprintf(m->view.diagnostic,sizeof m->view.diagnostic,"%s",line);mod_ui_publish(&m->view);}
 }
-static void fail(ModState *m,const char *s) { message(m,"error",s,strlen(s)); m->failed=1; }
+static void fail(ModState *m,const char *s) { message(m,"error",s,strlen(s)); m->failed=1; retire_native(m); }
 static void *allocate(void *context,void *ptr,size_t old,size_t n) {
     ModState *m=context; Allocation *block=ptr?(Allocation *)ptr-1:NULL;
     size_t capacity=block?block->capacity:0; (void)old;
@@ -124,7 +132,7 @@ static int call(ModState *m,lua_CFunction fn,int args,int results,int phase) {
     int status=lua_pcall(m->L,args,results,0); lua_sethook(m->L,NULL,0,0);
     if (status!=LUA_OK) {
         size_t n=0; const char *s=lua_type(m->L,-1)==LUA_TSTRING?lua_tolstring(m->L,-1,&n):NULL;
-        message(m,"error",s?s:"non-string error",s?n:16); m->failed=1; lua_pop(m->L,1);
+        message(m,"error",s?s:"non-string error",s?n:16); m->failed=1; lua_pop(m->L,1); retire_native(m);
     }
 #ifdef XCX_MOD_TESTING
     char line[160]; snprintf(line,sizeof line,"alloc %s %s attempts=%zu denied=%zu",m->package->id,phase_names[phase],m->attempts,m->denied); m->runtime->log(line);
@@ -138,6 +146,7 @@ static int unavailable(ModRuntime *rt,ModState *m) {
 ModRuntime *mod_runtime_start(ModPlan *plan,ModLog log,ModCancelled cancelled) {
     ModRuntime *rt=calloc(1,sizeof *rt); if (!rt) { log("mods: runtime allocation failed"); mod_ui_start_failed("Native mod runtime allocation failed; restart to retry."); return NULL; }
     rt->plan=plan; rt->log=log;
+    rt->providers=mod_providers_start(plan,log);
     unsigned processed=0;
     for (int i=0;i<plan->count;++i) {
         ModState *m=&rt->states[i]; m->runtime=rt; m->package=&plan->mods[i]; m->failed=m->package->rejected;
@@ -210,6 +219,8 @@ int mod_runtime_actions(ModRuntime *rt,ModCancelled cancelled) {
 }
 void mod_runtime_stop(ModRuntime *rt) {
     if (!rt) return;
+    if(!mod_providers_stop(rt->providers)){rt->log("providers: fatal cleanup failure; Lua states not closed");abort();}
+    mod_providers_free(rt->providers);rt->providers=NULL;
     for (int n=rt->count-1;n>=0;--n) {
         ModState *m=&rt->states[rt->order[n]];
         m->initialized=0;

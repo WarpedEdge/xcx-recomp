@@ -13,7 +13,7 @@ typedef struct {
     char *source;
     size_t source_size;
 } ModPackage;
-typedef struct { ModPackage mods[MOD_LIMIT]; int count; } ModPlan;
+typedef struct { ModPackage mods[MOD_LIMIT]; int count; char root[4096]; } ModPlan;
 typedef struct ModRuntime ModRuntime;
 typedef int (*ModCancelled)(void);
 ModPlan *mod_packages_read(const char *root, ModLog log);

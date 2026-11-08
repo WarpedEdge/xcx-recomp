@@ -115,6 +115,8 @@ ModPlan *mod_packages_read(const char *root,ModLog log) {
     if (!enabled) { if (length) {diagnostic(log,"enabled.txt","unsafe, unreadable or oversized configuration; no packages loaded");return NULL;} enabled=calloc(1,1);length=0;if(!enabled)return NULL; }
     if (memchr(enabled,0,length)) { diagnostic(log,"enabled.txt","embedded NUL; no packages loaded"); free(enabled); return NULL; }
     ModPlan *plan=calloc(1,sizeof *plan); if (!plan) { free(enabled); return NULL; }
+    if(strlen(root)>=sizeof plan->root){free(enabled);mod_packages_free(plan);return NULL;}
+    strcpy(plan->root,root);
     for (char *line=enabled;line;) {
         char *next=strchr(line,'\n'); if (next) *next++=0;
         size_t n=strlen(line); if (n && line[n-1]=='\r') line[--n]=0;
