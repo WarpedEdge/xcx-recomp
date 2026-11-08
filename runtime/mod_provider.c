@@ -144,7 +144,7 @@ ModProviders *mod_providers_start(const ModPlan *plan,ModLog log) {
         void *module=map(p);if(!module||!describe(p,module)){report(ctx,p->owner_id,"mapping or ABI rejected; mapped library retained");continue;}
         XmpCreate config={0};config.size=sizeof config;config.major=(uint32_t)p->major;config.minor=XMP_MINOR;config.owner=p->owner;config.generation=ctx->generation;config.required_capabilities=p->required;strcpy(config.package_id,p->owner_id);
         XmpResult result=p->api.create_idle(&config,&p->instance);
-        if(result!=XMP_OK||!p->instance){report(ctx,p->owner_id,"idle create failed (requires complete provider rollback)");if(p->instance){p->valid=1;report(ctx,p->owner_id,"provider violated failed-create token contract; retained for stop");}continue;}
+        if(result!=XMP_OK||!p->instance){report(ctx,p->owner_id,"idle create failed (requires complete provider rollback)");if(p->instance){p->valid=1;p->faulted=1;report(ctx,p->owner_id,"provider violated failed-create token contract; retained for stop");}continue;}
         p->valid=1;p->status.size=sizeof p->status;p->status.owner=p->owner;p->status.generation=ctx->generation;p->status.revision=p->major==2?0:1;strcpy(p->status.text,"Ready");p->status_dirty=1;char ready[128];snprintf(ready,sizeof ready,"idle provider ready build=%s",p->build);report(ctx,p->owner_id,ready);
     }
     return ctx;

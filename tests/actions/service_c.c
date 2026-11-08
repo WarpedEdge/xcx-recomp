@@ -23,7 +23,7 @@ static XmpResult XMP_CALL create(const XmpCreate *c,uint64_t *out){*out=0;if(liv
 #else
     int ok=!pthread_create(&p->thread,NULL,worker,p);
 #endif
-    if(!ok){lock_free(&p->mutex);free(p);return XMP_FAILED;}live=p;*out=++token;return XMP_OK;}
+    if(!ok){lock_free(&p->mutex);free(p);return XMP_FAILED;}live=p;*out=++token;return MODE==7?XMP_FAILED:XMP_OK;}
 static XmpResult XMP_CALL stop(uint64_t t){if(!live||t!=token)return XMP_INVALID;setflag(&live->stop,1);return XMP_OK;}
 static XmpResult XMP_CALL destroy(uint64_t t,uint32_t ms){if(!live||t!=token)return XMP_INVALID;while(ms--&&!flag(&live->done))delay(1);if(!flag(&live->done))return XMP_BUSY;join_thread(live->thread);lock_free(&live->mutex);free(live);live=NULL;return XMP_OK;}
 static XmpResult XMP_CALL submit(uint64_t t,const XmsCommand *c){if(!live||t!=token||flag(&live->stop))return XMP_FAILED;if(c->size!=sizeof *c||c->reserved||c->owner!=live->owner||c->generation!=live->generation||!c->request||c->opcode<1||c->opcode>4)return XMP_INVALID;if((c->opcode==1||c->opcode==3)&&(c->type!=XMS_NONE||c->value))return XMP_INVALID;if(c->opcode==2&&(c->type!=XMS_INTEGER||c->value<10||c->value>10000))return XMP_INVALID;if(c->opcode==4&&(c->type!=XMS_BOOL||c->value<0||c->value>1))return XMP_INVALID;if(c->opcode==3)return XMP_INVALID;lock_take(&live->mutex);if(c->request<=live->last_request){lock_drop(&live->mutex);return XMP_INVALID;}if(live->outstanding==32){lock_drop(&live->mutex);return XMP_BUSY;}live->queue[live->count++]=*c;++live->outstanding;live->last_request=c->request;lock_drop(&live->mutex);return XMP_OK;}

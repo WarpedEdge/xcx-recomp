@@ -71,3 +71,13 @@ class Actions(unittest.TestCase):
   (self.mods/'providers-enabled.txt').unlink();shutil.rmtree(self.mods/'alpha/native');(self.mods/'alpha/provider.ini').unlink()
   (self.mods/'alpha/main.lua').write_text("return {init=function() host.settings.register{version=1,id='actions',title='Script actions',fields={},actions={{id='ping',label='Ping'}}} end,events={['host.started']=function() end,['ui.action']=function(e) assert(e.action=='ping');host.ui.status('Script-only action completed') end},shutdown=function() end}")
   out=self.run_host('intent=alpha:ping','pump=80');self.assertIn('intent alpha ping 1',out);self.assertIn('Script-only action completed',out);self.assertNotIn('alpha error',out)
+
+ def test_failed_create_with_live_token_never_exposes_service(self):
+  self.package('alpha','c7')
+  out=self.run_host('intent=alpha:success','pump=50')
+  self.assertIn('provider violated failed-create token contract',out)
+  self.assertIn('intent alpha success 0',out)
+  self.assertRegex(out,r'page alpha status=1 pending=0 available=0')
+  self.assertNotIn('alpha result',out)
+  self.assertIn('provider destroyed before Lua teardown',out)
+  self.assertIn('alpha closed bytes=0 callbacks=0',out)

@@ -9,7 +9,7 @@ env=os.environ.copy();env['ASAN_OPTIONS']='detect_leaks=1:halt_on_error=1';env['
 def run(cmd):subprocess.run(list(map(str,cmd)),cwd=ROOT,env=env,check=True)
 for cc,lang,std in [(a.cc,'c','c11'),(a.cxx,'c++','c++17')]:run([cc,*flags,'-x',lang,'-std='+std,'-fsyntax-only',ROOT/'tests/actions/layout.c'])
 lib=['-shared','-fvisibility=hidden']+([] if WIN else ['-fPIC'])
-for mode in range(7):run([a.cc,*flags,'-std=gnu11',*lib,'-DMODE='+str(mode),ROOT/'tests/actions/service_c.c','-o',BUILD/('c'+str(mode)+EXT)])
+for mode in range(8):run([a.cc,*flags,'-std=gnu11',*lib,'-DMODE='+str(mode),ROOT/'tests/actions/service_c.c','-o',BUILD/('c'+str(mode)+EXT)])
 run([a.cc,*flags,'-std=gnu11',*lib,'-DBUILD="work2"',ROOT/'tests/actions/service_c.c','-o',BUILD/('update'+EXT)])
 run([a.cxx,*flags,'-std=c++17','-fno-exceptions','-fno-rtti',*([] if WIN else ['-fPIC']),'-c',ROOT/'tests/actions/service_cpp.cpp','-o',BUILD/'cpp.o']);run([a.cc,*flags,*lib,BUILD/'cpp.o','-o',BUILD/('cpp'+EXT)])
 run([a.cc,*flags,'-std=gnu11',ROOT/'tests/actions/abi_probe.c',ROOT/'runtime/mod_provider_platform.c',*([] if WIN else ['-ldl']),'-o',BUILD/('abi-probe'+EXE)])
