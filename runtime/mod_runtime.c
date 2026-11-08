@@ -186,7 +186,10 @@ static int apply_action(ModRuntime *rt,const ModAction *a) {
         for(int f=0;f<m->view.field_count;++f) {
             ModField *field=&m->view.fields[f];
             if(strcmp(a->field,field->id) || field->type!=a->type || a->value<field->minimum || a->value>field->maximum)continue;
-            if(field->value==a->value)return 1;
+            if(field->value==a->value) {
+                if(m->view.persistence_dirty){mod_settings_save(&m->view);mod_ui_publish(&m->view);}
+                return 1; // Persistence retry is independent of value-change delivery.
+            }
             field->value=a->value;m->action_field=f;
             mod_settings_save(&m->view);
             if(m->refs[3]!=LUA_NOREF) {rt->aggregate-=100;call(m,invoke,0,0,9);}

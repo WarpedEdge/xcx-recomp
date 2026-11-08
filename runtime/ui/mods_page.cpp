@@ -10,13 +10,14 @@ extern "C" {
 #include "imgui_internal.h"
 struct ModsWidget {ImGuiID id;ImGuiWindow *window;ImVec2 low,high;char mod[65],field[65];};
 static ModsWidget mods_widgets[128];static int mods_widget_count;
+static ImVec2 mods_retry_low,mods_retry_high;static bool mods_retry_visible;
 #endif
 static const char *status_name(int status) {
     switch(status) {case MOD_LOADED:return "Loaded";case MOD_DISABLED:return "Disabled";case MOD_INCOMPATIBLE:return "Incompatible";case MOD_FAULTED:return "Faulted";default:return "Starting";}
 }
 void mods_page(float scale,float bottom,bool focus_first) {
 #ifdef XCX_MOD_UI_TESTING
-    mods_widget_count=0;
+    mods_widget_count=0;mods_retry_visible=false;
 #endif
     mod_ui_interaction(1);
     static ModSnapshot snapshot;mod_ui_snapshot(&snapshot);
@@ -62,6 +63,18 @@ void mods_page(float scale,float bottom,bool focus_first) {
             }
             ImGui::EndDisabled();
             if(mod.save_note[0])ImGui::TextWrapped("%s",mod.save_note);
+            if(mod.persistence_dirty && mod.field_count) {
+                ImGui::BeginDisabled(mod.status!=MOD_LOADED);
+                if(ImGui::Button("Retry save")) {
+                    // A same-value action retries the complete page without repeating Lua events.
+                    const ModField &f=mod.fields[0];ModAction a={};a.generation=snapshot.generation;a.session=snapshot.session;a.type=f.type;a.value=f.value;
+                    snprintf(a.mod,sizeof a.mod,"%s",mod.id);snprintf(a.field,sizeof a.field,"%s",f.id);rt_mods_ui_submit(&a);
+                }
+#ifdef XCX_MOD_UI_TESTING
+                mods_retry_visible=true;mods_retry_low=ImGui::GetItemRectMin();mods_retry_high=ImGui::GetItemRectMax();
+#endif
+                ImGui::EndDisabled();
+            }
             if(snapshot.pending)ImGui::TextDisabled("Applying settings...");
             if(snapshot.notice[0])ImGui::TextWrapped("%s",snapshot.notice);
             ImGui::Separator();ImGui::TextWrapped("Package and enable/disable changes take effect after restart.");

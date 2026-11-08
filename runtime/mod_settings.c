@@ -148,7 +148,7 @@ void mod_settings_load(ModView *view) {
     else snprintf(view->save_note,sizeof view->save_note,"Stored settings rejected; using defaults.");
 }
 int mod_settings_save(ModView *view) {
-    char path[4096],data[4096];if(!setting_path(view->id,path,sizeof path)) {snprintf(view->save_note,sizeof view->save_note,"Persistence unavailable; session values only.");return 0;}
+    char path[4096],data[4096];if(!setting_path(view->id,path,sizeof path)) {snprintf(view->save_note,sizeof view->save_note,"Persistence unavailable; session values only.");view->persistence_dirty=1;return 0;}
     int at=snprintf(data,sizeof data,"version=1\n");
     for(int i=0;i<view->field_count;++i) {
         ModField *f=&view->fields[i];
@@ -157,5 +157,6 @@ int mod_settings_save(ModView *view) {
     }
     plat_file_mkdir_p(directory);
     int ok=plat_file_write_atomic(path,data,(size_t)at);
+    view->persistence_dirty=!ok;
     snprintf(view->save_note,sizeof view->save_note,"%s",ok?"Saved":"Save failed; previous file preserved. Session value retained.");return ok;
 }

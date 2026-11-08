@@ -15,7 +15,7 @@ typedef struct {
 } ModField;
 typedef struct {
     char id[65],name[97],version[32],diagnostic[257],page_id[65],title[97],save_note[129];
-    int status,field_count;
+    int status,field_count,persistence_dirty;
     ModField fields[MOD_FIELD_MAX];
 } ModView;
 typedef struct {

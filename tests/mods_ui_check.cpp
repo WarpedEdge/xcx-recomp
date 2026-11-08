@@ -34,6 +34,15 @@ extern "C" int controller_keyboard_checks(void) {
     verify(mod_ui_pop(&action)==1,"fresh mapped controller Confirm edits after release");
     io.AddKeyEvent(ImGuiKey_GamepadDpadDown,true);mods_frame();io.AddKeyEvent(ImGuiKey_GamepadDpadDown,false);mods_frame();
     verify(GImGui->NavId!=widget.id && GImGui->NavId!=0,"controller moves focus between settings");
+    // Only failed persistence offers retry; it queues the current value rather than an edit.
+    a.persistence_dirty=1;mod_ui_publish(&a);mods_frame();verify(mods_retry_visible,"dirty page offers Retry save");
+    float rx=(mods_retry_low.x+mods_retry_high.x)/2,ry=(mods_retry_low.y+mods_retry_high.y)/2;
+    io.AddMousePosEvent(rx,ry);io.AddMouseButtonEvent(0,true);mods_frame();io.AddMouseButtonEvent(0,false);mods_frame();
+    verify(mod_ui_pop(&action)==1 && !strcmp(action.mod,"alpha") && !strcmp(action.field,"hints") && action.value==a.fields[0].value,"Retry save queues same-value action for its owner");
+    a.status=MOD_FAULTED;mod_ui_publish(&a);mods_frame();verify(mods_retry_visible,"faulted dirty page retains retry layout");
+    io.AddMouseButtonEvent(0,true);mods_frame();io.AddMouseButtonEvent(0,false);mods_frame();verify(!mod_ui_pop(&action),"faulted page disables Retry save");
+    a.status=MOD_LOADED;
+    a.persistence_dirty=0;mod_ui_publish(&a);mods_frame();verify(!mods_retry_visible,"clean page has no Retry save control");
     ModSnapshot *snapshot=new ModSnapshot;mod_ui_snapshot(snapshot);action.generation=snapshot->generation;action.session=snapshot->session;action.type=MOD_BOOL;action.value=1;
     verify(mod_ui_submit(&action)==1,"queued action accepted while page active");
     menu_text_begin("Interruption","",10,0,0,0);mod_ui_snapshot(snapshot);verify(snapshot->pending==0,"text entry cancels pending Mods actions");verify(menu_text_active()!=0,"existing editor retains priority");

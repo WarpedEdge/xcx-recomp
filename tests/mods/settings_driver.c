@@ -8,6 +8,7 @@ static void dump(void) {
     printf("snapshot pending=%d\n",s->pending);
     for(int i=0;i<s->count;++i){ModView *m=&s->mods[i];printf("view %s %d %d\n",m->id,m->status,m->field_count);
         if(m->diagnostic[0])printf("diagnostic %s %s\n",m->id,m->diagnostic);
+        printf("dirty %s %d\n",m->id,m->persistence_dirty);
         if(m->save_note[0])printf("save %s %s\n",m->id,m->save_note);
         for(int j=0;j<m->field_count;++j)printf("field %s %s %d %d\n",m->id,m->fields[j].id,m->fields[j].type,m->fields[j].value);
     }free(s);
@@ -18,6 +19,9 @@ int main(int argc,char **argv) {
     while(mod_runtime_event(rt,NULL)){}
     mod_ui_interaction(1);dump();
     for(int i=3;i<argc;++i) {
+        if(!strcmp(argv[i],"--save-fail")){setenv("MOD_SAVE_FAIL","1",1);continue;}
+        if(!strcmp(argv[i],"--save-ok")){unsetenv("MOD_SAVE_FAIL");continue;}
+        if(!strcmp(argv[i],"--dump")){dump();continue;}
         if(!strcmp(argv[i],"--close")){mod_ui_interaction(0);continue;}
         if(!strcmp(argv[i],"--drain")){while(mod_runtime_actions(rt,NULL)){}continue;}
         if(!strcmp(argv[i],"--shutdown")){mod_ui_shutdown();mod_runtime_stop(rt);rt=NULL;continue;}
