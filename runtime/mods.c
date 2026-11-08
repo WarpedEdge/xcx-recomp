@@ -61,6 +61,8 @@ void rt_mods_start(void) {
         strcpy(slash+1,"mods");
     }
     plan=mod_packages_read(root,log_message);
+    // The loader compares schema-2 requirements with actual linked game metadata.
+    if(plan){extern const char rt_game_name[];snprintf(plan->game_id,sizeof plan->game_id,"%s",rt_game_name);}
     if (!plan) return; // No enabled valid package: no worker, Lua state or event queue.
     plat_mutex_lock(&lock);
     thread=plat_thread_new(worker,NULL,"xcx-mods");

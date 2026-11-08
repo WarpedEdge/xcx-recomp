@@ -36,17 +36,19 @@ static void report(ModProviders *p,const char *owner,const char *reason) {
 static int zero(const void *data,size_t n){const unsigned char *b=data;for(size_t i=0;i<n;++i)if(b[i])return 0;return 1;}
 static int hash_ok(const char *s){if(strlen(s)!=64)return 0;for(;*s;++s)if(!((*s>='0'&&*s<='9')||(*s>='a'&&*s<='f')))return 0;return 1;}
 static char *next_line(char *line) {char *n=strchr(line,'\n');if(n)*n++=0;size_t k=strlen(line);if(k&&line[k-1]=='\r')line[k-1]=0;return n;}
-static int metadata(Provider *p,char *text) {
-    unsigned fields=0;char owner[65]={0},provider[65]={0};
+static int metadata(Provider *p,char *text,const char *game) {
+    unsigned fields=0;int schema=0;char owner[65]={0},provider[65]={0},required_host[65]={0},required_game[65]={0};
     for(char *line=text;line;) {
         char *next=next_line(line);
         if(*line&&*line!='#') {
             char *v=strchr(line,'=');if(!v)return 0;*v++=0;unsigned bit=0;
-            if(!strcmp(line,"schema")){bit=1;if(strcmp(v,"1"))return 0;}
+            if(!strcmp(line,"schema")){bit=1;if(!strcmp(v,"1"))schema=1;else if(!strcmp(v,"2"))schema=2;else return 0;}
             else if(!strcmp(line,"id")){bit=2;if(!id(v))return 0;strcpy(provider,v);}
             else if(!strcmp(line,"owner")){bit=4;if(!id(v))return 0;strcpy(owner,v);}
             else if(!strcmp(line,"abi")){bit=8;if(!strcmp(v,"1.0"))p->major=1;else if(!strcmp(v,"2.0"))p->major=2;else return 0;}
             else if(!strcmp(line,"required")){bit=16;errno=0;char *end;if(!*v||*v<'0'||*v>'9')return 0;p->required=strtoull(v,&end,10);if(errno||*end)return 0;}
+            else if(!strcmp(line,"host")){bit=128;if(strlen(v)>64)return 0;strcpy(required_host,v);}
+            else if(!strcmp(line,"game")){bit=256;if(strlen(v)>64)return 0;strcpy(required_game,v);}
             else if(!strcmp(line,"linux-sha256")||!strcmp(line,"windows-sha256")) {
                 bit=!strcmp(line,"linux-sha256")?32:64;if(!hash_ok(v))return 0;
 #ifdef _WIN32
@@ -58,12 +60,14 @@ static int metadata(Provider *p,char *text) {
             if(fields&bit)return 0;fields|=bit;
         }line=next;
     }
+    if(schema==1&&(fields&(128|256)))return 0;
+    if(schema==2&&((fields&(128|256))!=(128|256)||strcmp(required_host,"xcx-mods-service-2.0")||!game||!*game||strcmp(required_game,game)))return 0;
     return (fields&31)==31&&p->hash[0]&&!strcmp(owner,p->owner_id)&&!strcmp(provider,p->id);
 }
-static int preflight(ModProviders *ctx,Provider *p,const char *root) {
+static int preflight(ModProviders *ctx,Provider *p,const char *root,const char *game) {
     ModProviderFile meta;int result=mod_provider_read(root,p->owner_id,"provider.ini",4096,&meta);
     if(result!=1)return 0;
-    int ok=!memchr(meta.data,0,meta.size)&&metadata(p,(char *)meta.data);mod_provider_file_close(&meta);if(!ok)return 0;
+    int ok=!memchr(meta.data,0,meta.size)&&metadata(p,(char *)meta.data,game);mod_provider_file_close(&meta);if(!ok)return 0;
 #ifdef _WIN32
     const char *binary="native/windows-x86_64/provider.dll";
 #else
@@ -127,7 +131,7 @@ ModProviders *mod_providers_start(const ModPlan *plan,ModLog log) {
         if(owner<0){report(ctx,owners[n],"owner absent/disabled/rejected; not loaded");continue;}
         if(ctx->count==PROVIDERS){report(ctx,"activation","more than four eligible providers; no providers loaded");for(int i=0;i<ctx->count;++i)mod_provider_file_close(&ctx->entries[i].file);ctx->count=0;return ctx;}
         Provider *p=&ctx->entries[ctx->count++];p->file.file=-1;p->owner=(uint64_t)owner+1;strcpy(p->owner_id,owners[n]);strcpy(p->id,ids[n]);
-        p->valid=preflight(ctx,p,plan->root);if(!p->valid)report(ctx,p->owner_id,"metadata, path, hash, image or dependency preflight rejected");
+        p->valid=preflight(ctx,p,plan->root,plan->game_id);if(!p->valid)report(ctx,p->owner_id,"metadata, path, hash, image or dependency preflight rejected");
     }
     if(ctx->count && !mod_provider_environment()) {
         report(ctx,"activation","unsupported native dependency environment; no providers loaded");

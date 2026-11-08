@@ -125,3 +125,9 @@ class Loader(unittest.TestCase):
  def test_owner_fault_retires_provider_before_other_delivery(self):
   self.package();self.activate();p=self.mods/'alpha/main.lua';p.write_text(p.read_text().replace("host.log('alpha ready')","error('fixture owner event fault')"));out=self.host(lua=True)
   self.assertIn('fixture owner event fault',out);self.assertLess(out.index('provider destroyed before Lua teardown'),out.index('beta ready\n') if 'beta ready\n' in out else out.index('beta stopped'));self.assertEqual(self.markers().count(' destroy'),1)
+
+ def test_schema2_host_game_preflight(self):
+  self.package();self.activate();p=self.mods/'alpha/provider.ini';original=p.read_text().replace('schema=1','schema=2')+'host=xcx-mods-service-2.0\ngame=2.0.0\n'
+  for text,game in [(original,'1.4.3'),(original.replace('service-2.0','service-9.0'),'2.0.0'),(original.replace('game=2.0.0\n',''),'2.0.0'),(original,'')]:
+   p.write_text(text);out=self.host(env={'XMP_TEST_GAME':game});self.assertEqual(self.markers(),'');self.assertIn('preflight rejected',out)
+  p.write_text(original);self.host(env={'XMP_TEST_GAME':'2.0.0'});self.assertIn('alpha.native destroy',self.markers())

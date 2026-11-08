@@ -4,7 +4,7 @@
 #include <string.h>
 static void log_line(const char *s){puts(s);fflush(stdout);}
 int main(int argc,char **argv){
-    if(argc<2)return 2;mod_ui_reset("");ModPlan *plan=mod_packages_read(argv[1],log_line);if(!plan){puts("no plan");return 0;}
+    if(argc<2)return 2;mod_ui_reset("");ModPlan *plan=mod_packages_read(argv[1],log_line);if(!plan){puts("no plan");return 0;}const char *game=getenv("XMP_TEST_GAME");if(game)snprintf(plan->game_id,sizeof plan->game_id,"%s",game);
     ModProviders *p=mod_providers_start(plan,log_line);int tokens=0;ModProviderToken old={0};
     for(int i=0;i<plan->count;++i){ModProviderToken t;if(mod_providers_token(p,(uint64_t)i+1,&t)){
         old=t;++tokens;printf("token %s\n",plan->mods[i].id);

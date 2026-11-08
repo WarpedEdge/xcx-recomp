@@ -133,7 +133,7 @@ static int pe_image(const ModProviderFile *f) {
         IMAGE_IMPORT_DESCRIPTOR d;memcpy(&d,b+p+at,sizeof d);if(!d.Name)return !d.FirstThunk&&!d.OriginalFirstThunk&&!d.TimeDateStamp&&!d.ForwarderChain;
         uint32_t text=pe_offset(b,n,d.Name,sections,count);if(!text)return 0;const char *s=(const char *)b+text;
         size_t bound=n-text;if(bound>96)bound=96;if(!memchr(s,0,bound))return 0;
-        if(_stricmp(s,"kernel32.dll")&&_stricmp(s,"ucrtbase.dll")&&_stricmp(s,"msvcrt.dll")&&_strnicmp(s,"api-ms-win-crt-",15))return 0;
+        if(_stricmp(s,"ws2_32.dll")&&_stricmp(s,"kernel32.dll")&&_stricmp(s,"ucrtbase.dll")&&_stricmp(s,"msvcrt.dll")&&_strnicmp(s,"api-ms-win-crt-",15))return 0;
         for(const char *c=s;*c;++c)if(!((*c>='a'&&*c<='z')||(*c>='A'&&*c<='Z')||(*c>='0'&&*c<='9')||*c=='-'||*c=='.'))return 0;
     }
     return 0;
