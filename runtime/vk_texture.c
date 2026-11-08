@@ -19,6 +19,8 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "appendage_glyph.h"
+#include "input_glyphs.h"
 #include "gfx.h"
 #include "host.h"
 #include "nvn_api.h"
@@ -320,7 +322,7 @@ static void init_image(Tex *e, VkCommandBuffer cb) {
 }
 
 // defer_init: the caller records the image's first transition (init_image or alias_copy).
-static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
+static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init, int optional) {
     static volatile int32_t n_unmapped, n_unsupported, n_failed, n_unbound;
     VkCtx *c = vk_ctx();
     const nvn_texdesc *d = &t->d;
@@ -394,7 +396,10 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
                    (usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
     if (fb_usage) ci.usage = usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     Tex *e = calloc(1, sizeof *e);
-    if (!e) rt_fatal("vk: out of memory for a texture");
+    if (!e) {
+        if (optional) return NULL;
+        rt_fatal("vk: out of memory for a texture");
+    }
     e->key = *k;
     e->t = *t;
     e->f = f;
@@ -849,7 +854,7 @@ static Tex *entry_of(const tex_t *t) {
             tex_alias = cfg_bool("XCX_TEX_ALIAS");
             rt_log("vk: texture aliases: %s", tex_alias ? "a new image takes the live image's content" : "a new image starts empty");
         }
-        if (!(e = create_tex(t, &k, tex_alias))) return NULL;
+        if (!(e = create_tex(t, &k, tex_alias, 0))) return NULL;
         perf_count(PERF_CNT_TEX_NEW);
         // released entries of another descriptor at this address are replaced by the new one; a live one holding
         // GPU-written content is the alias source, preferring the one that differs only in swizzle (same_but_swizzle)
@@ -1115,6 +1120,93 @@ const VkTexImage *vk_texture_by_id_locked(int id, view_t *view, int *has_view) {
     if (view) *view = has_view ? s->cview : s->v;
     if (has_view) *has_view = view ? s->chas_view : s->has_view;
     return e ? &e->pub : NULL;
+}
+
+// One immutable, module-owned image. It is never inserted into guest texture slots or the alias cache.
+static Tex *appendage_image[GLYPH_ART_MAX];
+static uint32_t *appendage_pixels[GLYPH_ART_MAX];
+static uint8_t appendage_attempted[GLYPH_ART_MAX];
+
+// Snapshot registration identity at recording, before a command copy can outlive or reuse its slot.
+int vk_appendage_capture_source(uint64_t handle) {
+    int id = (int)(handle & 0xfffff), valid = 0;
+    lock();
+    if (appendage_glyph_tagged(handle) && id < ntslots && tslots[id].used) {
+        const tex_t *t = &tslots[id].t;
+        if (t->d.width == 512 && t->d.height == 192 && t->d.format == 77 && !tslots[id].has_view)
+            valid = appendage_glyph_source(handle, t->serial, (uint64_t)(uintptr_t)t->mem);
+    }
+    unlock();
+    return valid;
+}
+
+static Tex *appendage_upload(unsigned art) {
+    if (art >= glyph_art_count() || art >= GLYPH_ART_MAX) return NULL;
+    if (appendage_attempted[art]) return appendage_image[art];
+    appendage_attempted[art] = 1;
+    VkCtx *c = vk_ctx();
+    const size_t bytes = 512 * 192 * 4;
+    uint32_t *pixels = appendage_glyph_failure("pixels") ? NULL : calloc(1, bytes);
+    if (!pixels) { appendage_glyph_note_fallback(); return NULL; }
+    if (!glyph_art_pixels(art, pixels)) { free(pixels); appendage_glyph_note_fallback(); return NULL; }
+    static pool_t pool = {.flags = NVN_MEMORY_POOL_FLAGS_CPU_CACHED};
+    tex_t t = {.d = {.target = NVN_TEXTURE_TARGET_2D, .format = 0x25,
+                     .flags = NVN_TEXTURE_FLAGS_LINEAR, .width = 512, .height = 192,
+                     .depth = 1, .levels = 1, .stride = 2048}, .mem = (uint8_t *)pixels, .pool = &pool};
+    nvn_tex_layout(&t.d, &t.L);
+    TexKey key;
+    make_key(&t, &key);
+    Tex *e = appendage_glyph_failure("image") ? NULL : create_tex(&t, &key, 1, 1);
+    if (!e) { free(pixels); appendage_glyph_note_fallback(); return NULL; }
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation allocation = NULL;
+    VmaAllocationInfo info = {0};
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = bytes,
+                             .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO,
+                                  .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                           VMA_ALLOCATION_CREATE_MAPPED_BIT};
+    if (appendage_glyph_failure("upload") ||
+        vmaCreateBuffer(c->vma, &bi, &ai, &buffer, &allocation, &info) != VK_SUCCESS || !info.pMappedData)
+        goto failed;
+    memcpy(info.pMappedData, pixels, bytes);
+    if (vmaFlushAllocation(c->vma, allocation, 0, bytes) != VK_SUCCESS) goto failed;
+    VkCommandBuffer cb = vk_upload_begin();
+    init_image(e, cb);
+    VkBufferImageCopy region = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                .imageExtent = {512, 192, 1}};
+    vkCmdCopyBufferToImage(cb, buffer, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
+    // Captures the current upload sequence and queue fence before releasing the batch lock.
+    vk_defer_buffer(buffer, allocation);
+    vk_upload_end();
+    e->uploaded = 1;
+    appendage_pixels[art] = pixels;
+    appendage_image[art] = e;
+    rt_log("appendage glyph: owned image %u uploaded: %s (512x192 RGBA)", art, glyph_art_name(art));
+    return e;
+failed:
+    if (buffer) vmaDestroyBuffer(c->vma, buffer, allocation);
+    destroy_tex(e);
+    free(pixels);
+    appendage_glyph_note_fallback();
+    rt_log("appendage glyph: optional upload failed; original texture retained");
+    return NULL;
+}
+
+const VkTexImage *vk_appendage_texture_locked(uint64_t handle, view_t *view, int *has_view) {
+    int id = (int)(handle & 0xfffff);
+    const VkTexImage *original = vk_texture_by_id_locked(id, view, has_view);
+    if (!appendage_glyph_tagged(handle) || !original || id >= ntslots) return original;
+    const tex_t *t = &tslots[id].t;
+    if (t->d.width != 512 || t->d.height != 192 || t->d.format != 77 ||
+        tslots[id].has_view || appendage_glyph_failure("source") ||
+        !appendage_glyph_source(handle, t->serial, (uint64_t)(uintptr_t)t->mem)) { appendage_glyph_note_fallback(); return original; }
+    Tex *e = appendage_upload(appendage_glyph_art(handle));
+    if (!e) return original;
+    if (view) memset(view, 0, sizeof *view);
+    if (has_view) *has_view = 0;
+    return &e->pub;
 }
 
 // vk_dump: the swizzle selectors of the descriptor registered in slot id; 0 when the slot is empty.
@@ -1845,6 +1937,11 @@ void vk_texture_census(VkTexCensus *s) {
 void vk_texture_shutdown(void) {
     VkCtx *c = vk_ctx();
     lock();
+    for (unsigned i = 0; i < GLYPH_ART_MAX; i++) {
+        if (appendage_image[i]) destroy_tex(appendage_image[i]);
+        appendage_image[i] = NULL;
+        free(appendage_pixels[i]); appendage_pixels[i] = NULL; appendage_attempted[i] = 0;
+    }
     Tex **list = malloc(sizeof *list * (size_t)(by_key.n + 1));
     int n = 0;
     for (uint32_t i = 0; i < by_key.cap; i++)

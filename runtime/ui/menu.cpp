@@ -20,6 +20,9 @@
 #include "imgui_internal.h"   // SetFocusID, NavCursorVisible
 #include "backends/imgui_impl_vulkan.h"
 #include "ui/binds_page.h"
+extern "C" {
+#include "input_glyphs.h"
+}
 #include "ui/option_rows.h"
 
 extern "C" {
@@ -588,6 +591,11 @@ static const char *pad_layout_note(void) {
 
 static void tab_controls(float scale) {
     opt_begin("##controls", scale);
+    static const char *const glyph_values[] = {"original","auto","playstation","xbox","steam","keyboard"};
+    static const char *const glyph_names[] = {"Switch / Original","Automatic","PlayStation","Xbox","Steam Controller","Keyboard / Mouse"};
+    if (!glyph_build_supported()) opt_disable_next(UI_MENU_GLYPH_UNSUPPORTED);
+    opt_choice_list("XCX_GLYPH_STYLE", UI_MENU_GLYPH_STYLE, glyph_values, glyph_names, GLYPH_STYLE_COUNT,
+                    UI_MENU_GLYPH_STYLE_DESC, -1, glyph_status());
     static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
     opt_choice("XCX_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
     opt_toggle("XCX_MOTION", UI_MENU_MOTION, UI_MENU_MOTION_DESC);

@@ -1,0 +1,33 @@
+"""Six verified XCX 2.0.0 sites for experimental Appendage glyph styles."""
+
+BUILD = 'ec4ed46bbc4a9ebbe7ce0af7a4a8ebbc09e5724a'
+SHA256 = '0a9dbf1f3816dd0fab0a08883d538c74d9b9fd7d939cb29aaf0947d71a201026'
+WORDS = {0x60f68c: 0x940c224d, 0xa27678: 0x9400802a,
+         0x60f6a8: 0x940c2246, 0x60f6c4: 0x940c223f,
+         0xa2fac0: 0xa9bd7bfd, 0xa2fcd0: 0xd10203ff}
+
+
+def verified(mod):
+    if mod.name != 'main' or mod.nso.build_id != BUILD:
+        return False
+    if mod.nso.source_sha256 != SHA256 or mod.base != 0x7000000000:
+        raise ValueError('Appendage prototype: build identity mismatch')
+    for offset, word in WORDS.items():
+        if mod.word(mod.base + offset) != word:
+            raise ValueError(f'Appendage prototype: instruction mismatch at {offset:#x}')
+    return True
+
+
+def entry(mod, address):
+    return 'appendage_glyph_retire(c->x[0]);' if address - mod.base in (0xa2fac0, 0xa2fcd0) else ''
+
+
+def call(mod, address, target):
+    offset = address - mod.base
+    if offset in (0x60f68c, 0x60f6a8, 0x60f6c4):
+        assert target == mod.base + 0x917fc0
+        return f'appendage_glyph_attach(c); f_{target:x}(c);'
+    if offset == 0xa27678:
+        assert target == mod.base + 0xa47720
+        return f'appendage_glyph_bind(c, c->x[19], f_{target:x});'
+    return f'f_{target:x}(c);'

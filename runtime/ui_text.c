@@ -107,6 +107,13 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_RUMBLE_CURVE_DESC] = "Lower values make weak vibration stronger.",
     [UI_MENU_RUMBLE_TRIGGERS] = "Trigger vibration (Xbox)",
     [UI_MENU_RUMBLE_TRIGGERS_DESC] = "Vibrates the triggers of an Xbox controller too.",
+    [UI_MENU_GLYPH_STYLE] = "Appendage glyph style (experimental)",
+    [UI_MENU_GLYPH_STYLE_DESC] = "Changes only the enemy-targeting Appendage guide in verified XCX 2.0.0. "
+        "Automatic follows intentional keyboard/mouse or exposed controller activity. Manual styles change artwork only, "
+        "not bindings or button layout. Supported letters, digits, left/right mouse and standard face/shoulder buttons use licensed glyphs. "
+        "Unbound, multiple, shared or unsupported bindings retain original Switch virtual labels; the status explains the fallback. "
+        "The guide still hides normally. Other HUD, menu and tutorial prompts are unchanged.",
+    [UI_MENU_GLYPH_UNSUPPORTED] = "Available only for the verified XCX 2.0.0 build",
     [UI_MENU_PAD_LAYOUT] = "Button layout",
     [UI_MENU_PAD_LAYOUT_DESC] = "Which button is A. Nintendo: the right one, as on a Switch. Xbox: the bottom one, as "
                                 "labelled on an Xbox controller (cross on a PlayStation controller). Automatic picks "

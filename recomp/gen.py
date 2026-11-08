@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 sys.path.insert(0, str(ROOT / 'recomp'))
 
 import flags  # noqa: E402
+import appendage  # noqa: E402
 import jumptables  # noqa: E402
 import patches  # noqa: E402
 import regs  # noqa: E402
@@ -209,6 +210,7 @@ class Emitter:
 
     def __init__(self, mod, starts, patched=None, reg_locals=regs.LOCALS, callee_saved=True, spins=None):
         self.mod = mod
+        self.appendage = appendage.verified(mod)
         self.starts = starts
         self.patched = patched or {}   # {address: (set index, [replacement words])} (recomp/patches.py)
         self.spins = spins or {}       # {spin wait back-edge: its head} (recomp/patches.py `spin`)
@@ -370,13 +372,16 @@ class Emitter:
         else:
             redispatch = f'{MUSTTAIL} rt_dispatch(c);'
             out = [f'void {fname(entry)}(Cpu *c) {{', f'    FN_ENTER({hx(entry)});']
+            if self.appendage and (hook := appendage.entry(mod, entry)):
+                out.append('    ' + hook)
             if fp.used:
                 out.append('    ' + fp.decl())
 
         def call(t, a):
             if t in starts:
                 refs.add(t)
-                return f'c->x[30] = {hx(a + 4)}; {spill}{fname(t)}(c);{reload_call}'
+                invoke = appendage.call(mod, a, t) if self.appendage else f'{fname(t)}(c);'
+                return f'c->x[30] = {hx(a + 4)}; {spill}{invoke}{reload_call}'
             self.stats['external_calls'] += 1
             return f'c->x[30] = {hx(a + 4)}; {spill}c->pc = {hx(t)}; rt_dispatch(c);{reload_call}'
 
@@ -482,7 +487,8 @@ def chunk_text(name, number, emitter, fns):
     protos = ''.join(f'void {fname(r)}(Cpu *c);\n' for r in sorted(refs))
     if emitter.uses_patches:
         protos += 'extern uint8_t rt_patch_on[];\n'
-    return (header(f'{name} chunk {number:04d}') + '#include "cpu.h"\n#include "simd.h"\n\n' + protos + '\n'
+    hook_header = '#include "appendage_glyph.h"\n' if any('appendage_glyph_' in s for s in body) else ''
+    return (header(f'{name} chunk {number:04d}') + '#include "cpu.h"\n#include "simd.h"\n' + hook_header + '\n' + protos + '\n'
             + '\n\n'.join(body) + '\n')
 
 
