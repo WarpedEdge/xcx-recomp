@@ -20,6 +20,10 @@ static void worker(void *unused) {
     (void)unused;
     plat_mutex_lock(&lock); worker_id=plat_thread_id(); plat_mutex_unlock(&lock);
     ModRuntime *runtime=mod_runtime_start(plan,log_message,cancelled);
+    if(!runtime) {
+        plat_mutex_lock(&lock);ready=1;worker_id=0;plat_cond_broadcast(&condition);plat_mutex_unlock(&lock);
+        return; // Startup failure has no Lua states or work to dispatch.
+    }
     // This event means host mod startup, not game readiness or a guest scheduler point.
     while (!cancelled() && mod_runtime_event(runtime,cancelled)) plat_sleep_ms(1);
     plat_mutex_lock(&lock); ready=1; plat_cond_broadcast(&condition);
@@ -60,7 +64,7 @@ void rt_mods_start(void) {
     if (!plan) return; // No enabled valid package: no worker, Lua state or event queue.
     plat_mutex_lock(&lock);
     thread=plat_thread_new(worker,NULL,"xcx-mods");
-    if (!thread) { plat_mutex_unlock(&lock); mod_packages_free(plan); plan=NULL; log_message("mods: worker creation failed"); return; }
+    if (!thread) { plat_mutex_unlock(&lock); mod_packages_free(plan); plan=NULL; log_message("mods: worker creation failed"); mod_ui_start_failed("Mod worker creation failed; restart to retry."); return; }
     while (!ready) plat_cond_wait(&condition,&lock);
     plat_mutex_unlock(&lock);
 }

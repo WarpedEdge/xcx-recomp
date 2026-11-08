@@ -136,7 +136,7 @@ static int unavailable(ModRuntime *rt,ModState *m) {
     return 0;
 }
 ModRuntime *mod_runtime_start(ModPlan *plan,ModLog log,ModCancelled cancelled) {
-    ModRuntime *rt=calloc(1,sizeof *rt); if (!rt) { log("mods: runtime allocation failed"); return NULL; }
+    ModRuntime *rt=calloc(1,sizeof *rt); if (!rt) { log("mods: runtime allocation failed"); mod_ui_start_failed("Native mod runtime allocation failed; restart to retry."); return NULL; }
     rt->plan=plan; rt->log=log;
     unsigned processed=0;
     for (int i=0;i<plan->count;++i) {

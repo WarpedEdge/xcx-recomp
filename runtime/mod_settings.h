@@ -33,5 +33,6 @@ int mod_ui_submit(const ModAction *action);
 int mod_ui_action_current(const ModAction *action);
 int mod_ui_pop(ModAction *out);
 void mod_ui_shutdown(void);
+void mod_ui_start_failed(const char *reason);
 void mod_settings_load(ModView *view);
 int mod_settings_save(ModView *view);

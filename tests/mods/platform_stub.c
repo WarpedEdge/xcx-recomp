@@ -6,10 +6,13 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <stdatomic.h>
+int test_threads_created,test_threads_joined;
+atomic_int test_threads_finished;
 struct PlatThread { pthread_t thread; PlatThreadFn fn; void *arg; };
-static void *entry(void *p) { PlatThread *t=p; t->fn(t->arg); return NULL; }
-PlatThread *plat_thread_new(PlatThreadFn fn,void *arg,const char *name) { (void)name; PlatThread *t=malloc(sizeof *t); if (!t) return NULL; t->fn=fn; t->arg=arg; if (pthread_create(&t->thread,NULL,entry,t)) { free(t); return NULL; } return t; }
-void plat_thread_join(PlatThread *t) { pthread_join(t->thread,NULL); free(t); }
+static void *entry(void *p) { PlatThread *t=p; t->fn(t->arg);atomic_fetch_add(&test_threads_finished,1); return NULL; }
+PlatThread *plat_thread_new(PlatThreadFn fn,void *arg,const char *name) { (void)name; if(getenv("MOD_THREAD_FAIL"))return NULL; PlatThread *t=malloc(sizeof *t); if (!t) return NULL; t->fn=fn; t->arg=arg; if (pthread_create(&t->thread,NULL,entry,t)) { free(t); return NULL; } ++test_threads_created;return t; }
+void plat_thread_join(PlatThread *t) { pthread_join(t->thread,NULL);++test_threads_joined; free(t); }
 uint32_t plat_thread_id(void) { return (uint32_t)syscall(SYS_gettid); }
 // Test static storage avoids adding unrelated allocation behavior to lock setup.
 static pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;

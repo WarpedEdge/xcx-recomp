@@ -56,6 +56,14 @@ int mod_ui_submit(const ModAction *a) {
 int mod_ui_action_current(const ModAction *a) {take();int ok=!stopped&&active&&a->generation==snapshot.generation&&a->session==snapshot.session;release();return ok;}
 int mod_ui_pop(ModAction *out) { take();int ok=queued>0&&!stopped;if(ok) {*out=queue[0];memmove(queue,queue+1,(size_t)(--queued)*sizeof *queue);} release();return ok; }
 void mod_ui_shutdown(void) { take();stopped=1;active=0;queued=0;++snapshot.session;release(); }
+void mod_ui_start_failed(const char *reason) {
+    take();
+    if(!stopped)for(int i=0;i<snapshot.count;++i)if(snapshot.mods[i].status==MOD_STARTING) {
+        snapshot.mods[i].status=MOD_FAULTED;
+        snprintf(snapshot.mods[i].diagnostic,sizeof snapshot.mods[i].diagnostic,"%s",reason);
+    }
+    release();
+}
 static int setting_path(const char *id,char *out,size_t size) {
     if (!directory[0]) return 0;
     return snprintf(out,size,"%s/%s.ini",directory,id)<(int)size;
