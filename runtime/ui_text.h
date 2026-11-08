@@ -158,6 +158,8 @@ typedef enum {
     UI_MENU_OV_FMT_FSR,       // "AMD FSR 1, sharpness %d%%"
     UI_MENU_OV_SCALE_NONE, UI_MENU_OV_SCALE_BILINEAR,
     UI_MENU_LAST_ID = UI_MENU_OV_SCALE_BILINEAR,
+    // Controller palette in the SDL text-entry window; existing catalog ids remain stable.
+    UI_SWKBD_GRID_HINT, UI_SWKBD_PALETTE, UI_SWKBD_SPACE, UI_SWKBD_BACKSPACE, UI_SWKBD_UNBOUND, UI_SWKBD_SHIFT, UI_SWKBD_MOMENTARY_SHIFT,
     UI_TEXT_COUNT
 } UiTextId;
 

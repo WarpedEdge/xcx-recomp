@@ -25,6 +25,10 @@ typedef struct { const char *lang; const char *const *text; } Row;
     [UI_SWKBD_CANCEL] = cancel, [UI_SWKBD_PAD_HINT] = hint, LANG_NAMES
 
 static const char *const text_en[UI_TEXT_COUNT] = {
+    [UI_SWKBD_GRID_HINT] = "Controller: %s selects a key, %s confirms, %s cancels. D-pad or left stick moves. %s: Backspace. %s: Delete. Hold %s: Shift. %s: Caps Lock. %s / %s: text cursor.",
+    [UI_SWKBD_SHIFT] = "Caps Lock", [UI_SWKBD_MOMENTARY_SHIFT] = "Shift",
+    [UI_SWKBD_PALETTE] = "Controller keyboard: Latin letters, digits and space. You can also type with your keyboard.",
+    [UI_SWKBD_SPACE] = "Space", [UI_SWKBD_BACKSPACE] = "Backspace", [UI_SWKBD_UNBOUND] = "Unbound",
     SWKBD("Text entry", "Enter a name", "Cross", "OK", "Cancel", "Controller: A = OK, B = Cancel"),
 
     [UI_MENU_TITLE] = "Settings",
@@ -259,6 +263,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
 };
 
 static const char *const text_ru[UI_TEXT_COUNT] = {
+    [UI_SWKBD_GRID_HINT] = "Контроллер: %s — выбрать клавишу, %s — подтвердить, %s — отменить. Крестовина или левый стик — перемещение. %s — назад удалить. %s — удалить вперёд. Удерживать %s — Shift. %s — Caps Lock. %s / %s — курсор.",
+    [UI_SWKBD_SHIFT] = "Caps Lock", [UI_SWKBD_MOMENTARY_SHIFT] = "Shift",
+    [UI_SWKBD_PALETTE] = "Клавиатура контроллера: латинские буквы, цифры и пробел. Можно вводить текст и с обычной клавиатуры.",
+    [UI_SWKBD_SPACE] = "Пробел", [UI_SWKBD_BACKSPACE] = "Удалить", [UI_SWKBD_UNBOUND] = "Не назначено",
     SWKBD("Ввод текста", "Введите имя", "Cross", "ОК", "Отмена", "Контроллер: A — ОК, B — отмена"),
 
     [UI_MENU_TITLE] = "Настройки",
