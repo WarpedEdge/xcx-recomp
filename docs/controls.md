@@ -8,7 +8,7 @@ Input comes from the first SDL3 gamepad, the keyboard and the mouse, merged into
 - `xbox`: south A, east B, west X, north Y, as an Xbox pad labels them; on a PlayStation pad cross is A, circle B, square X, triangle Y.
 - `auto` (default): `nintendo` for a pad whose east button SDL reports labelled A (Switch Pro Controller, Nintendo-layout pads), `xbox` for the others.
 
-The log names the layout in effect (`input: gamepad layout ...`); the menu shows it under *Automatic*. The game's button prompts stay Switch letters either way.
+The log names the layout in effect (`input: gamepad layout ...`); the menu shows it under *Automatic*. The game's button prompts stay Switch letters by default. The experimental Appendage-only style preference below is separate from this input layout.
 
 | Switch | Gamepad (by position, Nintendo layout) | Keyboard and mouse | Action in the world |
 |---|---|---|---|
@@ -88,3 +88,17 @@ The stick direction bits (`StickLLeft` to `StickRDown`) are derived from the sti
 ## RenderDoc capture (blocked)
 
 `XCX_RDOC=<frame>[,...]` (`runtime/rdoc_win.c`; `XCX_RDOC_DIR`, `XCX_RDOC_DLL`) loads RenderDoc before `vkCreateInstance`. RenderDoc hides `VK_EXT_external_memory_host`, which the back end requires for guest pool imports (`runtime/vk_memory.c`), so device creation fails under it. A capture needs a copy-based pool fallback first.
+
+## Experimental Appendage glyphs
+
+In F1/Esc → Controls, **Appendage glyph style (experimental)** changes only the verified XCX 2.0.0 enemy-targeting Appendage guide. It offers Switch / Original, Automatic, PlayStation, Xbox, Steam Controller and Keyboard / Mouse. Other HUD, menu and tutorial prompts remain unchanged. The guide still appears briefly on targeting/retargeting and hides normally.
+
+Automatic follows fresh intentional keyboard/mouse or controller activity even with a controller connected. Held input and small stick drift do not take the display back. Mouse clicks count; sustained captured camera motion can count, while incidental movement, capture/focus motion and single spikes are filtered. These filters do not change gameplay dead zones or emitted inputs. Manual selection fixes artwork without changing bindings or the separate Button layout preference.
+
+The guide represents virtual R held with Y or A for previous/next appendage. With the default Xbox input layout on a PlayStation pad, it shows R1 with Triangle / Cross; keyboard/mouse defaults show R with left mouse / E. It uses the current bindings, not fixed artwork-to-physical-button assumptions. Keyboard letter/digit glyphs follow the current unshifted keyboard labels.
+
+Coverage is deliberately bounded: standard face/shoulder/trigger buttons for the named controller families; letters, digits and left/right mouse for keyboard/mouse. Multiple, shared, unbound or unsupported bindings use the original virtual Switch labels for the whole chord, with a reason under the preference. Unknown controller families also use original labels. Steam Input virtual devices are identified only by the controller interface exposed to SDL; an exposed Xbox controller is treated as Xbox. Manual Steam Controller styling supports its exposed standard controls, not arbitrary paddles, touchpad regions or hidden physical hardware.
+
+The experimental renderer keeps a process-wide history of 192 successful button-node attachments (at most 64 complete guide constructions). Reusing a live guide does not consume it; reconstruction does, even while Original is selected. Once the budget is full and the current trio is no longer complete, it keeps original labels and explains that restarting the game restores styles. Changing styles does not reset the budget.
+
+The preference persists as `glyph_style = original|auto|playstation|xbox|steam|keyboard` in `xcx.ini`, independently of `pad_layout` and `bind_*`. Original is the default. It is unavailable for unverified game builds. This is experimental coverage, not universal prompt replacement or a claim of Windows/other-controller runtime acceptance.
