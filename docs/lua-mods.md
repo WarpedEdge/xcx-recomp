@@ -118,7 +118,7 @@ Rendering copies native snapshots and queues actions; it never enters Lua. Actio
 
 Settings live beside the executable in `mod-settings/<mod-id>.ini`, independently of an overridden package root, profiles and account IDs. The bounded version-1 format uses typed values and stable enum IDs. Invalid known types/ranges, duplicates or malformed files discard the whole stored set and use declared defaults, with a visible note; startup does not overwrite the file. Missing fields use current defaults, existing valid values survive default changes, removed fields are ignored and dropped on the next successful save. Renaming a field creates a new identity. Enum reordering preserves the symbolic choice.
 
-Each save writes a temporary file and atomically replaces the previous file. Failure preserves the previous file, retains the session value and displays a warning. Close the process and replace only package files when updating scripts: settings, profiles and logs remain outside that operation. See [the candidate review](mods-ui-review.md) for validation and platform limits.
+Each save writes a temporary file and atomically replaces the previous file. Failure preserves the previous file, retains the session value and displays a warning. Close the process and replace only package files when updating scripts: settings, profiles and logs remain outside that operation. See [the reviewer guide](review/lua-mod-support.md) for validation and platform limits.
 
 
 ## Settings failure recovery

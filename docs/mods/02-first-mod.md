@@ -71,6 +71,10 @@ Actions are optional declarations on the same page, at most four, with stable ID
 
 A page with only actions can declare `fields={}`. Provider-gated actions use `provider=true`, but need an explicitly trusted native association to become available. Use typed command IDs described by that provider; don't encode an address or structured message into an unrelated scalar.
 
+## Find errors and logs
+
+Open F1/Esc → Mods and select the package for its status and bounded diagnostic. `host.log` and protected-callback errors include the package ID and phase in the host log. For an ordinary launch, look beside the executable in `logs/xcx.log`; older runs rotate to `xcx.1.log` through `xcx.4.log`. The same messages go to terminal stderr. If your launcher redirects stderr to a regular file (for example `2> author-test.log`), inspect that file: this build does not also create its rotating log in that case. Keep logs separate for each test instance. Logging is limited to 16 script messages per state, so log transitions rather than every counter update.
+
 ## Update or disable
 
 Close the game before changing source packages. Replace only package files, preserve `mod-settings`, executable settings, profiles and logs, then restart. Removing `hello` from enabled.txt disables its Lua state; retaining the catalog entry keeps it listed as Disabled. Never replace a profile as part of installing a Lua mod. UI/events provide no game-save editing API.

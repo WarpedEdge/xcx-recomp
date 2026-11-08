@@ -15,6 +15,7 @@ return {
   }
  end,
  events={
+  ['host.started']=function() end,
   ['ui.action']=function(e)
    if e.action=='run' then
     local request,reason=host.provider.submit('success')
@@ -24,7 +25,8 @@ return {
   ['provider.event']=function(e)
    if e.kind=='result' then host.ui.status(e.result..': '..e.message) end
   end
- }
+ },
+ shutdown=function() end
 }
 ```
 

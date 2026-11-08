@@ -33,3 +33,23 @@ class Registration(unittest.TestCase):
 
  def test_registration_after_init_unavailable(self):
   out=self.run_mod('',event='local ok,why='+self.call()+';assert(not ok and why=="unavailable")');self.assertIn('unregistered',out);self.assertNotIn(' error ',out)
+
+ def test_first_mod_with_documented_menu_registration(self):
+  import re,shutil
+  root=Path(__file__).resolve().parents[2]
+  with tempfile.TemporaryDirectory() as tmp:
+   t=Path(tmp);mods=t/'mods';shutil.copytree(root/'examples/mods/hello',mods/'hello');(mods/'enabled.txt').write_text('hello\n');settings=t/'settings';settings.mkdir()
+   snippet=re.search(r'```lua\n(.*?)```',(root/'docs/mods/03-menu-registration.md').read_text(),re.S)[1]
+   source=mods/'hello/main.lua';source.write_text(source.read_text().replace("host.ui.status('Choose Say hello.')",snippet+"\n  host.ui.status('Choose Say hello.')"))
+   r=subprocess.run([os.environ['MENU_TEST_EXE'],str(mods),str(settings)],capture_output=True,text=True,timeout=4)
+   self.assertEqual(r.returncode,0,r.stdout+r.stderr);self.assertEqual(r.stderr,'');self.assertNotIn(' error ',r.stdout);self.assertIn('registered hello workshop preferences Workshop',r.stdout);self.assertIn('hello closed bytes=0 callbacks=0',r.stdout)
+
+ def test_complete_provider_actions_reference_example(self):
+  import re
+  root=Path(__file__).resolve().parents[2]
+  with tempfile.TemporaryDirectory() as tmp:
+   t=Path(tmp);mods=t/'mods';package=mods/'hello';package.mkdir(parents=True);(mods/'enabled.txt').write_text('hello\n');settings=t/'settings';settings.mkdir()
+   (package/'mod.ini').write_text((root/'examples/mods/hello/mod.ini').read_text())
+   (package/'main.lua').write_text(re.search(r'```lua\n(.*?)```',(root/'docs/provider-actions.md').read_text(),re.S)[1])
+   r=subprocess.run([os.environ['MENU_TEST_EXE'],str(mods),str(settings)],capture_output=True,text=True,timeout=4)
+   self.assertEqual(r.returncode,0,r.stdout+r.stderr);self.assertEqual(r.stderr,'');self.assertNotIn(' error ',r.stdout);self.assertIn('hello ready init',r.stdout);self.assertIn('hello closed bytes=0 callbacks=0',r.stdout)
