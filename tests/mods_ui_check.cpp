@@ -72,6 +72,12 @@ extern "C" int controller_keyboard_checks(void) {
     verify(mod_ui_intent_submit(&intent),"old page intent queued before selection change");
     float bx=(mods_row_low[1].x+mods_row_high[1].x)/2,by=(mods_row_low[1].y+mods_row_high[1].y)/2;
     io.AddMousePosEvent(bx,by);io.AddMouseButtonEvent(0,true);mods_frame();io.AddMouseButtonEvent(0,false);mods_frame();mod_ui_snapshot(snapshot);verify(snapshot->intent_pending==0,"selecting another mod cancels unaccepted old-page intents");
+    // Registered native entries route through this same page; lifetime epochs never retain guest objects.
+    strcpy(a.page_id,"page");a.status=MOD_LOADED;mod_ui_publish(&a);mod_menu_reset();mod_menu_support(1);ModMenuEntry entry={};strcpy(entry.owner,"alpha");strcpy(entry.entry,"entry");strcpy(entry.page,"page");strcpy(entry.label,"Example");verify(!mod_menu_register(&entry),"native menu slot accepts owned entry");
+    for(int repeat=0;repeat<3;++repeat){set_open(0);g_registered_epoch=0;verify(mod_menu_request(),"registered page request admitted repeatedly");bool opened=false;registered_route(opened,false);verify(opened&&g_open.load()&&g_tab_request==TAB_MODS,"native request opens existing Mods tab");mods_frame();verify(mods_widget_count>0&&!strcmp(mods_widgets[0].mod,"alpha"),"registered target remains stable owner");set_open(0);opened=false;registered_route(opened,false);verify(!g_registered_epoch,"Back clears shortcut lifetime without guest reconstruction");}
+    verify(mod_menu_request(),"request before destruction");mod_menu_invalidate();bool opened=false;registered_route(opened,false);verify(!opened,"destruction cancels pending open");
+    mod_menu_request();registered_route(opened,false);a.status=MOD_FAULTED;mod_ui_publish(&a);registered_route(opened,false);verify(!opened&&!g_open.load(),"owner fault closes shortcut safely");
+    a.status=MOD_LOADED;mod_ui_publish(&a);mod_menu_request();registered_route(opened,true);verify(!opened,"text entry wins over menu request");mod_menu_request();menu_vk_release();registered_route(opened,false);verify(!opened,"renderer release cancels menu request");mod_menu_support(-1);mod_menu_invalidate();verify(!strcmp(mod_menu_register(&entry),"unavailable"),"renderer unavailability is explicit");
     mod_ui_shutdown();verify(!mod_ui_intent_submit(&intent),"shutdown rejects side-effect intents");verify(!mod_ui_submit(&action),"teardown rejects stale actions");delete snapshot;
     ImGui::DestroyContext();printf("Mods UI: %d checks, %d failures\n",mods_checks,mods_failures);return prior || mods_failures;
 }

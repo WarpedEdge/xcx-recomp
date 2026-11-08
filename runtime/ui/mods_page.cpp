@@ -18,6 +18,8 @@ static ImVec2 mods_retry_low,mods_retry_high;static bool mods_retry_visible;
 static const char *status_name(int status) {
     switch(status) {case MOD_LOADED:return "Loaded";case MOD_DISABLED:return "Disabled";case MOD_INCOMPATIBLE:return "Incompatible";case MOD_FAULTED:return "Faulted";default:return "Starting";}
 }
+static char requested_owner[65],requested_page[65];
+void mods_page_select(const char *owner,const char *page){snprintf(requested_owner,sizeof requested_owner,"%s",owner);snprintf(requested_page,sizeof requested_page,"%s",page);}
 void mods_page(float scale,float bottom,bool focus_first) {
 #ifdef XCX_MOD_UI_TESTING
     mods_widget_count=0;mods_retry_visible=false;mods_button_count=0;
@@ -25,6 +27,7 @@ void mods_page(float scale,float bottom,bool focus_first) {
     mod_ui_interaction(1);
     static ModSnapshot snapshot;mod_ui_snapshot(&snapshot);
     static char selected[65];
+    if(requested_owner[0]){for(int i=0;i<snapshot.count;++i)if(!strcmp(snapshot.mods[i].id,requested_owner)&&!strcmp(snapshot.mods[i].page_id,requested_page))snprintf(selected,sizeof selected,"%s",requested_owner);requested_owner[0]=0;}
     if(!snapshot.count) {ImGui::TextWrapped("No mods configured. Add packages and edit enabled.txt, then restart.");return;}
     int index=0;for(int i=0;i<snapshot.count;++i)if(!strcmp(selected,snapshot.mods[i].id))index=i;
     snprintf(selected,sizeof selected,"%s",snapshot.mods[index].id);

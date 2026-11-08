@@ -1,6 +1,7 @@
 // Ordinary-game lifecycle adapter. Lua executes only on this dedicated host thread.
 #include "mods.h"
 #include "mod_internal.h"
+#include "mod_menu.h"
 #include "platform/platform.h"
 #include <stdatomic.h>
 #include <stdio.h>
@@ -60,6 +61,8 @@ void rt_mods_start(void) {
         if (!slash || (size_t)(slash-root)+6>=sizeof root) return;
         strcpy(slash+1,"mods");
     }
+    mod_menu_reset();
+    extern int rt_mod_menu_capable(void);mod_menu_support(rt_mod_menu_capable());
     plan=mod_packages_read(root,log_message);
     // The loader compares schema-2 requirements with actual linked game metadata.
     if(plan){extern const char rt_game_name[];snprintf(plan->game_id,sizeof plan->game_id,"%s",rt_game_name);}
@@ -71,6 +74,7 @@ void rt_mods_start(void) {
     plat_mutex_unlock(&lock);
 }
 void rt_mods_shutdown(void) {
+    mod_menu_support(0);mod_menu_invalidate();
     plat_mutex_lock(&lock);
     mod_ui_shutdown();
     atomic_store_explicit(&stopping,1,memory_order_release); plat_cond_broadcast(&condition);

@@ -27,6 +27,7 @@ extern "C" {
 #include "cfg.h"
 #include "mods.h"
 #include "mod_settings.h"
+#include "mod_menu.h"
 #include "input.h"
 #include "input_map.h"
 #include "input_wsys.h"
@@ -304,6 +305,7 @@ static int fonts_up(float scale) {
 }
 
 extern "C" void menu_vk_release(void) {
+    mod_menu_invalidate();
     mod_ui_interaction(0);
     if (g_ctx_ok) vk_down();
 }
@@ -773,6 +775,8 @@ static void tab_advanced(float scale) {
 static const UiTextId kTabNames[TAB_COUNT] = {UI_MENU_TAB_SCREEN, UI_MENU_TAB_GAME, UI_MENU_TAB_SOUND,
                                               UI_MENU_TAB_CONTROLS, UI_MENU_TAB_MENU, UI_MENU_TAB_ADVANCED, UI_MENU_TAB_MODS};
 static int g_tab;               // the tab shown
+static uint64_t g_registered_epoch;
+static char g_registered_owner[65];
 static int g_tab_request = -1;  // select this tab at the next layout; -1 none
 static int g_focus_page = -1;   // this tab's first row takes the cursor once it is shown; -1 none
 
@@ -790,6 +794,14 @@ static uint64_t g_text_repeat_at;
 static const int text_columns[] = {11, 10, 10, 8, 1, 2};
 static const char *const text_letters[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"};
 enum { TEXT_CASE = -1, TEXT_BACKSPACE = -2, TEXT_OK = -3, TEXT_CANCEL = -4, TEXT_DELETE = -5, TEXT_LEFT = -6, TEXT_RIGHT = -7, TEXT_SHIFT = -8 };
+
+static void registered_route(bool &open,bool text){
+    if(g_registered_epoch){ModMenuEntry current;if(!open){g_registered_epoch=0;}else if(text||g_failed_flag()||mod_menu_epoch()!=g_registered_epoch||!mod_menu_snapshot(&current)||strcmp(current.owner,g_registered_owner)){set_open(0);open=false;g_registered_epoch=0;}}
+    ModMenuEntry requested;if(mod_menu_take(&requested)&&!open&&!text&&!g_failed_flag()){
+        mods_page_select(requested.owner,requested.page);g_tab_request=TAB_MODS;g_registered_epoch=requested.epoch;snprintf(g_registered_owner,sizeof g_registered_owner,"%s",requested.owner);set_open(1);open=true;
+    }
+
+}
 
 extern "C" void menu_text_begin(const char *prompt, const char *initial, int max_len, int min_len, uint32_t disabled,
                                 int digits_only) {
@@ -1415,6 +1427,8 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     perf_tick(plat_now_ns(), t);
     bool open = g_open.load(std::memory_order_relaxed);
     bool text = g_text.load(std::memory_order_acquire);
+    registered_route(open,text);
+
     if(!open || text || g_failed_flag())mod_ui_interaction(0);
     if (!open && !text) {
         if (g_save_pending) g_save_pending = opt_save_tick(1);   // closed: the last change goes to xcx.ini now
@@ -1438,6 +1452,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     if (!vk_up(t) || (g_font_scale != scale && !fonts_up(scale))) {
         rt_log("menu: Dear ImGui Vulkan back end set-up failed; the menu stays closed");
         g_failed.store(1);
+        mod_menu_support(-1);mod_menu_invalidate();
         mod_ui_interaction(0);
         set_open(0);
         return 0;

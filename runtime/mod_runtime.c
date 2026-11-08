@@ -1,6 +1,7 @@
 // Serialized Lua host domain. Source and event data are copied; no engine ABI is exposed.
 #include "mod_internal.h"
 #include "mod_provider.h"
+#include "mod_menu.h"
 #include "mod_text.h"
 #include "lua.h"
 #include "lauxlib.h"
@@ -79,6 +80,7 @@ static void select_fields(lua_State *L,int original,const char *const *names) {
 }
 static int settings_register(lua_State *L);
 static int settings_get(lua_State *L);
+static int menu_register(lua_State *L);
 static int provider_status(lua_State *L);
 static int provider_submit(lua_State *L);
 static int ui_status(lua_State *L);
@@ -104,6 +106,7 @@ static int setup(lua_State *L) {
     lua_newtable(L);lua_pushcfunction(L,settings_register);lua_setfield(L,-2,"register");lua_pushcfunction(L,settings_get);lua_setfield(L,-2,"get");lua_setfield(L,-2,"settings");
     lua_newtable(L);lua_pushcfunction(L,provider_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,provider_submit);lua_setfield(L,-2,"submit");lua_setfield(L,-2,"provider");
     lua_newtable(L);lua_pushcfunction(L,ui_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,ui_enable);lua_setfield(L,-2,"enable");lua_setfield(L,-2,"ui");
+    lua_newtable(L);lua_pushcfunction(L,menu_register);lua_setfield(L,-2,"register");lua_setfield(L,-2,"menu");
     lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushstring(L,owner(L)->package->id); lua_setfield(L,-2,"id"); lua_setglobal(L,"host");
     return 0;
 }
@@ -133,7 +136,8 @@ static int discover(lua_State *L) {
 static int invoke(lua_State *L) {
     ModState *m=owner(L); int slot=m->phase==5?0:m->phase==6?1:m->phase==9?3:m->phase==10?4:m->phase==11?5:2;
     lua_rawgeti(L,LUA_REGISTRYINDEX,m->refs[slot]);
-    if (slot==1) { lua_newtable(L); lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushliteral(L,"startup"); lua_setfield(L,-2,"phase"); }
+    if (slot==1) { lua_newtable(L); lua_newtable(L);lua_pushcfunction(L,menu_register);lua_setfield(L,-2,"register");lua_setfield(L,-2,"menu");
+    lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushliteral(L,"startup"); lua_setfield(L,-2,"phase"); }
     if(slot==3) {
         ModField *f=&m->view.fields[m->action_field];lua_newtable(L);
         lua_pushstring(L,m->view.page_id);lua_setfield(L,-2,"page");lua_pushstring(L,f->id);lua_setfield(L,-2,"field");
@@ -265,7 +269,7 @@ int mod_runtime_actions(ModRuntime *rt,ModCancelled cancelled) {
 }
 void mod_runtime_stop(ModRuntime *rt) {
     if (!rt) return;
-    rt->stopping=1;
+    rt->stopping=1;mod_menu_support(0);mod_menu_invalidate();
     if(!mod_providers_stop(rt->providers)){rt->log("providers: fatal cleanup failure; Lua states not closed");abort();}
     mod_providers_free(rt->providers);rt->providers=NULL;
     for (int n=rt->count-1;n>=0;--n) {
@@ -384,3 +388,15 @@ static int provider_submit(lua_State *L) {
 }
 static int ui_status(lua_State *L){ModState *m=owner(L);luaL_checktype(L,1,LUA_TSTRING);size_t n;const char *text=lua_tolstring(L,1,&n);if(n>256||!mod_text_valid(text,n))return luaL_error(L,"invalid bounded UI status");memcpy(m->view.ui_status,text,n);m->view.ui_status[n]=0;if(m->initialized)mod_ui_publish(&m->view);return 0;}
 static int ui_enable(lua_State *L){ModState *m=owner(L);luaL_checktype(L,1,LUA_TSTRING);luaL_checktype(L,2,LUA_TBOOLEAN);size_t n;const char *id=lua_tolstring(L,1,&n);for(int i=0;i<m->view.button_count;++i)if(strlen(m->view.buttons[i].id)==n&&!memcmp(id,m->view.buttons[i].id,n)){m->view.buttons[i].enabled=lua_toboolean(L,2);if(m->initialized)mod_ui_publish(&m->view);return 0;}return luaL_error(L,"unknown action ID");}
+
+static int menu_register(lua_State *L){
+ ModState *m=owner(L);if(m->phase!=5){lua_pushnil(L);lua_pushliteral(L,"unavailable");return 2;}
+ luaL_checktype(L,1,LUA_TTABLE);lua_getfield(L,1,"version");lua_Integer version=lua_isinteger(L,-1)?lua_tointeger(L,-1):0;lua_pop(L,1);
+ lua_getfield(L,1,"location");size_t n;const char *location=lua_tolstring(L,-1,&n);int supported=version==1&&location&&n==6&&!memcmp(location,"online",6);lua_pop(L,1);
+ if(!supported){lua_pushnil(L);lua_pushliteral(L,"unsupported");return 2;}
+ ModMenuEntry e={0};snprintf(e.owner,sizeof e.owner,"%s",m->package->id);
+ const char *keys[]={"id","page","label"};char *dest[]={e.entry,e.page,e.label};size_t caps[]={sizeof e.entry,sizeof e.page,sizeof e.label};
+ for(int i=0;i<3;++i){lua_getfield(L,1,keys[i]);luaL_checktype(L,-1,LUA_TSTRING);const char *v=lua_tolstring(L,-1,&n);if(!n||n>=caps[i]||memchr(v,0,n))return luaL_error(L,"invalid menu string");for(size_t j=0;j<n;++j)if(i==2?!((v[j]>='a'&&v[j]<='z')||(v[j]>='A'&&v[j]<='Z')||(v[j]>='0'&&v[j]<='9')||v[j]==' '||v[j]=='-'||v[j]=='_'||v[j]=='.'||v[j]=='('||v[j]==')'):!((v[j]>='a'&&v[j]<='z')||(j&&((v[j]>='0'&&v[j]<='9')||v[j]=='.'||v[j]=='_'||v[j]=='-'))))return luaL_error(L,"invalid menu label or ID");memcpy(dest[i],v,n);lua_pop(L,1);}
+ if(!m->view.page_id[0]||strcmp(e.page,m->view.page_id)){lua_pushnil(L);lua_pushliteral(L,"unavailable");return 2;}
+ const char *error=mod_menu_register(&e);if(error){lua_pushnil(L);lua_pushstring(L,error);return 2;}lua_pushboolean(L,1);return 1;
+}

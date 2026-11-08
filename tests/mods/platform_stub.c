@@ -29,3 +29,5 @@ int plat_cond_wait_ns(PlatCond *c,PlatMutex *m,uint64_t ns) {
 }
 
 const char rt_game_name[]="standalone";
+
+int rt_mod_menu_capable(void){return 0;}
