@@ -8,6 +8,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 static atomic_flag gate=ATOMIC_FLAG_INIT;
 static ModSnapshot snapshot;
 static ModAction queue[MOD_ACTION_MAX];
@@ -65,11 +72,55 @@ static int stored_value(ModField *f,const char *text,int *value) {
     if (errno || end==text+2 || *end || n<f->minimum || n>f->maximum) return 0;
     *value=(int)n;return 1;
 }
+// Settings use their own bounded snapshot reader; game-save helpers are unchanged.
+// Return 0 only for an absent file/root, 1 for a complete regular file, -1 otherwise.
+static int settings_read(const char *id,char *data,size_t *length) {
+#ifdef _WIN32
+    char path[4096];wchar_t root[4096],wide[4096];
+    if(!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,directory,-1,root,4096))return -1;
+    HANDLE dir=CreateFileW(root,FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS,NULL);
+    if(dir==INVALID_HANDLE_VALUE){DWORD e=GetLastError();return e==ERROR_FILE_NOT_FOUND||e==ERROR_PATH_NOT_FOUND?0:-1;}
+    BY_HANDLE_FILE_INFORMATION info;
+    int valid=GetFileType(dir)==FILE_TYPE_DISK && GetFileInformationByHandle(dir,&info) && (info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) && !(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT);
+    CloseHandle(dir);if(!valid)return -1;
+    if(!setting_path(id,path,sizeof path) || !MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,path,-1,wide,4096))return -1;
+    DWORD attrs=GetFileAttributesW(wide);
+    if(attrs==INVALID_FILE_ATTRIBUTES){DWORD e=GetLastError();return e==ERROR_FILE_NOT_FOUND||e==ERROR_PATH_NOT_FOUND?0:-1;}
+    if(attrs&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DEVICE))return -1;
+    HANDLE file=CreateFileW(wide,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,NULL);
+    if(file==INVALID_HANDLE_VALUE){DWORD e=GetLastError();return e==ERROR_FILE_NOT_FOUND||e==ERROR_PATH_NOT_FOUND?0:-1;}
+    LARGE_INTEGER size;int result=-1;
+    if(GetFileType(file)==FILE_TYPE_DISK && GetFileInformationByHandle(file,&info) && !(info.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT)) && GetFileSizeEx(file,&size) && size.QuadPart>=0 && size.QuadPart<=4096) {
+        DWORD got=0,tail=0;char extra;
+        if(ReadFile(file,data,(DWORD)size.QuadPart,&got,NULL) && got==(DWORD)size.QuadPart && ReadFile(file,&extra,1,&tail,NULL) && !tail){*length=got;result=1;}
+    }
+    CloseHandle(file);return result;
+#else
+    int dir=open(directory,O_RDONLY|O_DIRECTORY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC);
+    if(dir<0)return errno==ENOENT?0:-1;
+    char name[80];snprintf(name,sizeof name,"%s.ini",id);struct stat st;
+    // Reject special files before open as well as checking the actual opened handle.
+    if(fstatat(dir,name,&st,AT_SYMLINK_NOFOLLOW)) {int e=errno;close(dir);return e==ENOENT?0:-1;}
+    if(!S_ISREG(st.st_mode)){close(dir);return -1;}
+    int file=openat(dir,name,O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC);close(dir);
+    if(file<0)return -1;
+    int result=-1;
+    if(!fstat(file,&st) && S_ISREG(st.st_mode) && st.st_size>=0 && st.st_size<=4096) {
+        size_t at=0,n=(size_t)st.st_size;
+        while(at<n) {ssize_t got=read(file,data+at,n-at);if(got<0 && errno==EINTR)continue;if(got<=0)break;at+=(size_t)got;}
+        char extra;ssize_t tail;
+        do {tail=read(file,&extra,1);}while(tail<0 && errno==EINTR);
+        if(at==n && tail==0){*length=n;result=1;}
+    }
+    close(file);return result;
+#endif
+}
 void mod_settings_load(ModView *view) {
-    char path[4096],data[4097];if (!setting_path(view->id,path,sizeof path)) return;
-    FILE *f=fopen(path,"rb");if (!f) return;
-    size_t n=fread(data,1,sizeof data,f);int read_error=ferror(f);fclose(f);
-    if (read_error || n>4096 || memchr(data,0,n)) {snprintf(view->save_note,sizeof view->save_note,"Stored settings rejected; using defaults.");return;}
+    char data[4097];if(!directory[0])return;
+    size_t n=0;int result=settings_read(view->id,data,&n);
+    if(!result)return;
+    if(result<0){snprintf(view->save_note,sizeof view->save_note,"Stored settings unreadable or unsafe; using defaults.");return;}
+    if(memchr(data,0,n)){snprintf(view->save_note,sizeof view->save_note,"Stored settings rejected; using defaults.");return;}
     data[n]=0;
     ModView candidate=*view;unsigned seen=0;int valid=1;
     char *line=data;int first=1;
