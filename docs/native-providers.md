@@ -1,6 +1,6 @@
 # Optional native providers: lifecycle v1.0
 
-This experimental interface loads an explicitly trusted native library for an enabled Lua package and creates an idle instance. It supports lifecycle fixtures only. There are no Lua provider operations, commands/events, networking services, UI actions or guest-memory capabilities. Ordinary Lua source packages still use the existing loader without compiling or installing any native code.
+This experimental interface loads an explicitly trusted native library for an enabled Lua package and creates an idle instance. ABI 1.0 supports lifecycle fixtures only. The explicit [ABI 2.0 service extension](provider-actions.md) adds typed commands, copied status/results and Lua-driven Mods actions; it does not reinterpret the 1.0 contract or add networking/gameplay access. Ordinary Lua source packages still use the existing loader without compiling or installing any native code.
 
 ## Package layout and activation
 

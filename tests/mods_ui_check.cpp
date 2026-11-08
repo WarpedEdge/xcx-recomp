@@ -52,6 +52,26 @@ extern "C" int controller_keyboard_checks(void) {
     a.status=MOD_LOADED;mod_ui_publish(&a);mods_frame();mod_ui_snapshot(snapshot);action.generation=snapshot->generation;action.session=snapshot->session;
     verify(mod_ui_submit(&action)!=0,"renderer cleanup setup action");menu_vk_release();mod_ui_snapshot(snapshot);verify(snapshot->pending==0,"renderer release cancels pending actions");
     g_open.store(1);mod_ui_interaction(1);mod_ui_snapshot(snapshot);action.generation=snapshot->generation;action.session=snapshot->session;mod_ui_submit(&action);set_open(0);mod_ui_snapshot(snapshot);verify(snapshot->pending==0,"menu close cancels pending actions");
-    mod_ui_shutdown();verify(!mod_ui_submit(&action),"teardown rejects stale actions");delete snapshot;
+    // Action widgets use their own FIFO and keep close/text ownership independent of native work.
+    g_open.store(1);g_tab_request=TAB_MODS;a.status=MOD_LOADED;a.provider_available=1;a.button_count=2;
+    for(int i=0;i<2;++i){snprintf(a.buttons[i].id,sizeof a.buttons[i].id,"action%d",i);snprintf(a.buttons[i].label,sizeof a.buttons[i].label,"Run action %d",i);a.buttons[i].enabled=1;a.buttons[i].provider=1;}
+    mod_ui_publish(&a);mods_frame();mods_frame();verify(mods_button_count==2,"two stable action buttons render");
+    float ax=(mods_button_low[0].x+mods_button_high[0].x)/2,ay=(mods_button_low[0].y+mods_button_high[0].y)/2;
+    io.AddMousePosEvent(ax,ay);io.AddMouseButtonEvent(0,true);mods_frame();io.AddMouseButtonEvent(0,false);mods_frame();ModIntent intent={};
+    verify(mod_ui_intent_pop(&intent)&&!strcmp(intent.mod,"alpha")&&!strcmp(intent.action,"action0"),"action mouse click queues owner-scoped intent");
+    ImGui::FocusWindow(mods_button_window[0]);ImGui::SetFocusID(mods_button_id[0],mods_button_window[0]);GImGui->NavInputSource=ImGuiInputSource_Keyboard;GImGui->NavCursorVisible=true;ImGui::ClearActiveID();
+    io.AddKeyEvent(ImGuiKey_Space,true);mods_frame();io.AddKeyEvent(ImGuiKey_Space,false);mods_frame();verify(mod_ui_intent_pop(&intent),"keyboard activates action button");
+    ImGui::SetFocusID(mods_button_id[0],mods_button_window[0]);GImGui->NavInputSource=ImGuiInputSource_Gamepad;GImGui->NavCursorVisible=true;ImGui::ClearActiveID();io.ClearInputKeys();test_buttons=0;pad_events(io,1);mods_frame();pad_events(io,0);mods_frame();test_buttons=1ull<<B_A;pad_events(io,0);mods_frame();test_buttons=0;pad_events(io,0);mods_frame();verify(mod_ui_intent_pop(&intent),"mapped controller Confirm activates action button");
+    a.provider_pending=1;mod_ui_publish(&a);mods_frame();io.AddMousePosEvent(ax,ay);io.AddMouseButtonEvent(0,true);mods_frame();io.AddMouseButtonEvent(0,false);mods_frame();verify(!mod_ui_intent_pop(&intent),"pending provider action button is disabled");
+    set_open(0);mod_ui_snapshot(snapshot);verify(snapshot->mods[0].provider_pending==1 && !g_open.load(),"close stays responsive and retains accepted native pending state");
+    a.provider_pending=0;g_open.store(1);g_tab_request=TAB_MODS;mod_ui_publish(&a);mods_frame();mods_frame();mod_ui_snapshot(snapshot);intent.generation=snapshot->generation;intent.session=snapshot->session;strcpy(intent.mod,"alpha");strcpy(intent.action,"action0");
+    int accepted=0;for(int i=0;i<32;++i)accepted+=mod_ui_intent_submit(&intent);verify(accepted==32&&!mod_ui_intent_submit(&intent),"side-effect intents are FIFO and never settings-coalesced");
+    menu_text_begin("Priority","",8,0,0,0);mod_ui_snapshot(snapshot);verify(snapshot->intent_pending==0,"text entry cancels unaccepted action intents");g_text.store(0);g_open.store(1);mods_frame();mods_frame();
+    mod_ui_snapshot(snapshot);intent.generation=snapshot->generation;intent.session=snapshot->session;verify(mod_ui_intent_submit(&intent),"fresh action admitted after text entry");menu_vk_release();mod_ui_snapshot(snapshot);verify(snapshot->intent_pending==0,"renderer loss cancels unaccepted action intents");
+    g_open.store(1);mod_ui_interaction(1);mod_ui_snapshot(snapshot);intent.generation=snapshot->generation;intent.session=snapshot->session;ModIntent stale=intent;stale.session--;verify(!mod_ui_intent_submit(&stale),"stale UI epoch rejects side effects");
+    verify(mod_ui_intent_submit(&intent),"old page intent queued before selection change");
+    float bx=(mods_row_low[1].x+mods_row_high[1].x)/2,by=(mods_row_low[1].y+mods_row_high[1].y)/2;
+    io.AddMousePosEvent(bx,by);io.AddMouseButtonEvent(0,true);mods_frame();io.AddMouseButtonEvent(0,false);mods_frame();mod_ui_snapshot(snapshot);verify(snapshot->intent_pending==0,"selecting another mod cancels unaccepted old-page intents");
+    mod_ui_shutdown();verify(!mod_ui_intent_submit(&intent),"shutdown rejects side-effect intents");verify(!mod_ui_submit(&action),"teardown rejects stale actions");delete snapshot;
     ImGui::DestroyContext();printf("Mods UI: %d checks, %d failures\n",mods_checks,mods_failures);return prior || mods_failures;
 }

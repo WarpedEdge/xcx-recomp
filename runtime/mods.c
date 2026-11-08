@@ -87,3 +87,8 @@ int rt_mods_ui_submit(const ModAction *action) {
     if(cancelled() || !mod_ui_submit(action))return 0;
     plat_mutex_lock(&lock);plat_cond_broadcast(&condition);plat_mutex_unlock(&lock);return 1;
 }
+
+int rt_mods_ui_intent(const ModIntent *intent) {
+    if(cancelled()||!mod_ui_intent_submit(intent))return 0;
+    plat_mutex_lock(&lock);plat_cond_broadcast(&condition);plat_mutex_unlock(&lock);return 1;
+}

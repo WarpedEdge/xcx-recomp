@@ -19,12 +19,13 @@ static atomic_flag gate=ATOMIC_FLAG_INIT;
 static ModSnapshot snapshot;
 static ModAction queue[MOD_ACTION_MAX];
 static int queued,active,stopped;
+static ModIntent intents[MOD_ACTION_MAX];static int intent_count;
 static char directory[4096];
 static void take(void) { while (atomic_flag_test_and_set_explicit(&gate,memory_order_acquire)) {} }
 static void release(void) { atomic_flag_clear_explicit(&gate,memory_order_release); }
 void mod_ui_reset(const char *root) {
     take(); uint64_t generation=snapshot.generation+1; memset(&snapshot,0,sizeof snapshot);snapshot.generation=generation;snapshot.session=1;
-    queued=active=stopped=0;snprintf(directory,sizeof directory,"%s",root?root:""); release();
+    queued=active=stopped=intent_count=0;snprintf(directory,sizeof directory,"%s",root?root:""); release();
 }
 void mod_ui_publish(const ModView *view) {
     take(); int slot=-1;
@@ -33,9 +34,9 @@ void mod_ui_publish(const ModView *view) {
     if (slot>=0 && !stopped) snapshot.mods[slot]=*view;
     release();
 }
-void mod_ui_snapshot(ModSnapshot *out) { take();*out=snapshot;out->pending=queued;release(); }
+void mod_ui_snapshot(ModSnapshot *out) { take();*out=snapshot;out->pending=queued;out->intent_pending=intent_count;release(); }
 void mod_ui_interaction(int enabled) {
-    take(); if (active!=enabled) {active=enabled;++snapshot.session;if (!active) queued=0;} release();
+    take(); if (active!=enabled) {active=enabled;++snapshot.session;if (!active) queued=intent_count=0;} release();
 }
 int mod_ui_submit(const ModAction *a) {
     int ok=0;take();
@@ -55,7 +56,7 @@ int mod_ui_submit(const ModAction *a) {
 }
 int mod_ui_action_current(const ModAction *a) {take();int ok=!stopped&&active&&a->generation==snapshot.generation&&a->session==snapshot.session;release();return ok;}
 int mod_ui_pop(ModAction *out) { take();int ok=queued>0&&!stopped;if(ok) {*out=queue[0];memmove(queue,queue+1,(size_t)(--queued)*sizeof *queue);} release();return ok; }
-void mod_ui_shutdown(void) { take();stopped=1;active=0;queued=0;++snapshot.session;release(); }
+void mod_ui_shutdown(void) { take();stopped=1;active=0;queued=intent_count=0;++snapshot.session;release(); }
 void mod_ui_start_failed(const char *reason) {
     take();
     if(!stopped)for(int i=0;i<snapshot.count;++i)if(snapshot.mods[i].status==MOD_STARTING) {
@@ -160,3 +161,16 @@ int mod_settings_save(ModView *view) {
     view->persistence_dirty=!ok;
     snprintf(view->save_note,sizeof view->save_note,"%s",ok?"Saved":"Save failed; previous file preserved. Session value retained.");return ok;
 }
+
+int mod_ui_intent_submit(const ModIntent *a) {
+    int ok=0;take();
+    if(!memchr(a->mod,0,sizeof a->mod)||!memchr(a->action,0,sizeof a->action)||!active||stopped||a->generation!=snapshot.generation||a->session!=snapshot.session)goto done;
+    for(int i=0;i<snapshot.count;++i){ModView *m=&snapshot.mods[i];if(strcmp(m->id,a->mod)||m->status!=MOD_LOADED)continue;
+        for(int j=0;j<m->button_count;++j){ModButton *b=&m->buttons[j];if(strcmp(b->id,a->action)||!b->enabled||(b->provider&&(!m->provider_available||m->provider_pending)))continue;
+            if(intent_count<MOD_ACTION_MAX){intents[intent_count++]=*a;ok=1;snapshot.notice[0]=0;}else snprintf(snapshot.notice,sizeof snapshot.notice,"Action queue is full; try again.");
+        }
+    }
+ done:release();return ok;
+}
+int mod_ui_intent_pop(ModIntent *a){take();int ok=intent_count>0&&!stopped;if(ok){*a=intents[0];memmove(intents,intents+1,(size_t)(--intent_count)*sizeof *intents);}release();return ok;}
+int mod_ui_intent_current(const ModIntent *a){take();int ok=active&&!stopped&&a->generation==snapshot.generation&&a->session==snapshot.session;release();return ok;}

@@ -1,6 +1,7 @@
 // Serialized Lua host domain. Source and event data are copied; no engine ABI is exposed.
 #include "mod_internal.h"
 #include "mod_provider.h"
+#include "mod_text.h"
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
@@ -17,22 +18,26 @@ typedef struct {
     size_t used, peak, attempts, denied;
     ModView view;
     int action_field;
-    int refs[4], failed, initialized, phase, instructions, logs;
+    char action_id[65];ModServiceEvent service_event;
+    int refs[6], failed, initialized, phase, instructions, logs;
 } ModState;
 struct ModRuntime {
     ModPlan *plan;
     ModProviders *providers;
+    ModCancelled cancelled;int stopping;
     ModLog log;
     ModState states[MOD_LIMIT];
-    int order[MOD_LIMIT], count, aggregate, event_cursor;
+    int order[MOD_LIMIT], count, aggregate, event_cursor;unsigned service_cursor,lane;
 };
+static void sync_view(ModState *m);
 static void retire_native(ModState *m) {
     ModProviderToken token;uint64_t native_owner=(uint64_t)(m->package-m->runtime->plan->mods)+1;
     if(mod_providers_token(m->runtime->providers,native_owner,&token)&&!mod_providers_stop_owner(m->runtime->providers,native_owner,token)) {
         m->runtime->log("providers: fatal owner cleanup failure; Lua state retained");abort();
     }
+    sync_view(m);mod_ui_publish(&m->view);
 }
-static const char *phase_names[]={"state","setup","load","chunk","descriptor","init","event","shutdown","close","settings"};
+static const char *phase_names[]={"state","setup","load","chunk","descriptor","init","event","shutdown","close","settings","action","provider"};
 static ModState *owner(lua_State *L) { return *(ModState **)lua_getextraspace(L); }
 static void message(ModState *m,const char *kind,const char *s,size_t n) {
     char line[512];
@@ -60,7 +65,7 @@ static void *allocate(void *context,void *ptr,size_t old,size_t n) {
 }
 static void hook(lua_State *L,lua_Debug *ar) {
     (void)ar; ModState *m=owner(L); m->instructions-=100;
-    if (m->phase==6 || m->phase==9) { m->runtime->aggregate-=100; if (m->runtime->aggregate<=0) luaL_error(L,"aggregate dispatch budget exceeded"); }
+    if (m->phase==6 || m->phase>=9) { m->runtime->aggregate-=100; if (m->runtime->aggregate<=0) luaL_error(L,"aggregate dispatch budget exceeded"); }
     if (m->instructions<=0) luaL_error(L,"instruction budget exceeded");
 }
 static int log_message(lua_State *L) {
@@ -74,6 +79,15 @@ static void select_fields(lua_State *L,int original,const char *const *names) {
 }
 static int settings_register(lua_State *L);
 static int settings_get(lua_State *L);
+static int provider_status(lua_State *L);
+static int provider_submit(lua_State *L);
+static int ui_status(lua_State *L);
+static int ui_enable(lua_State *L);
+static void sync_view(ModState *m) {
+    ModServiceView v;mod_provider_view(m->runtime->providers,(uint64_t)(m->package-m->runtime->plan->mods)+1,&v);
+    m->view.provider_available=v.available;m->view.provider_pending=v.pending;snprintf(m->view.provider_note,sizeof m->view.provider_note,"%s",v.text);
+}
+static void opaque(char *out,size_t cap,uint64_t generation,uint64_t owner,uint64_t request) {snprintf(out,cap,"%016llx:%016llx:%016llx",(unsigned long long)generation,(unsigned long long)owner,(unsigned long long)request);}
 static int setup(lua_State *L) {
     static const char *const base[]={"assert","error","ipairs","next","pairs","select","tonumber","tostring","type","_VERSION",NULL};
     static const char *const strings[]={"byte","char","len","lower","reverse","sub","upper",NULL};
@@ -88,6 +102,8 @@ static int setup(lua_State *L) {
     luaopen_math(L); select_fields(L,-1,maths); lua_remove(L,-2); lua_setglobal(L,"math");
     lua_newtable(L); lua_pushcfunction(L,log_message); lua_setfield(L,-2,"log");
     lua_newtable(L);lua_pushcfunction(L,settings_register);lua_setfield(L,-2,"register");lua_pushcfunction(L,settings_get);lua_setfield(L,-2,"get");lua_setfield(L,-2,"settings");
+    lua_newtable(L);lua_pushcfunction(L,provider_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,provider_submit);lua_setfield(L,-2,"submit");lua_setfield(L,-2,"provider");
+    lua_newtable(L);lua_pushcfunction(L,ui_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,ui_enable);lua_setfield(L,-2,"enable");lua_setfield(L,-2,"ui");
     lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushstring(L,owner(L)->package->id); lua_setfield(L,-2,"id"); lua_setglobal(L,"host");
     return 0;
 }
@@ -104,16 +120,18 @@ static int discover(lua_State *L) {
     lua_pushnil(L);
     while (lua_next(L,-2)) {
         size_t size=0; const char *name=lua_type(L,-2)==LUA_TSTRING?lua_tolstring(L,-2,&size):NULL;
-        if (!name || !((size==12 && !memcmp(name,"host.started",12)) || (size==16 && !memcmp(name,"settings.changed",16)))) return luaL_error(L,"unsupported event name");
+        if (!name || !((size==12 && !memcmp(name,"host.started",12)) || (size==16 && !memcmp(name,"settings.changed",16)) || (size==9 && !memcmp(name,"ui.action",9)) || (size==14 && !memcmp(name,"provider.event",14)))) return luaL_error(L,"unsupported event name");
         lua_pop(L,1);
     }
     lua_pushliteral(L,"host.started"); lua_rawget(L,-2); luaL_checktype(L,-1,LUA_TFUNCTION); m->refs[1]=luaL_ref(L,LUA_REGISTRYINDEX);
     lua_pushliteral(L,"settings.changed");lua_rawget(L,-2);
     if(!lua_isnil(L,-1)) {luaL_checktype(L,-1,LUA_TFUNCTION);m->refs[3]=luaL_ref(L,LUA_REGISTRYINDEX);} else lua_pop(L,1);
+    const char *extra[]={"ui.action","provider.event"};
+    for(int i=0;i<2;++i){lua_pushstring(L,extra[i]);lua_rawget(L,-2);if(!lua_isnil(L,-1)){luaL_checktype(L,-1,LUA_TFUNCTION);m->refs[4+i]=luaL_ref(L,LUA_REGISTRYINDEX);}else lua_pop(L,1);}
     return 0;
 }
 static int invoke(lua_State *L) {
-    ModState *m=owner(L); int slot=m->phase==5?0:m->phase==6?1:m->phase==9?3:2;
+    ModState *m=owner(L); int slot=m->phase==5?0:m->phase==6?1:m->phase==9?3:m->phase==10?4:m->phase==11?5:2;
     lua_rawgeti(L,LUA_REGISTRYINDEX,m->refs[slot]);
     if (slot==1) { lua_newtable(L); lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushliteral(L,"startup"); lua_setfield(L,-2,"phase"); }
     if(slot==3) {
@@ -122,7 +140,12 @@ static int invoke(lua_State *L) {
         if(f->type==MOD_BOOL)lua_pushboolean(L,f->value);else if(f->type==MOD_ENUM)lua_pushstring(L,f->options[f->value].id);else lua_pushinteger(L,f->value);
         lua_setfield(L,-2,"value");
     }
-    lua_call(L,slot==1 || slot==3,0); return 0;
+    if(slot==4){lua_newtable(L);lua_pushstring(L,m->action_id);lua_setfield(L,-2,"action");}
+    if(slot==5){ModServiceEvent *e=&m->service_event;lua_newtable(L);char handle[64];opaque(handle,sizeof handle,e->terminal?e->result.generation:e->status.generation,e->terminal?e->result.owner:e->status.owner,0);lua_pushstring(L,handle);lua_setfield(L,-2,"handle");lua_pushstring(L,e->terminal?"result":"status");lua_setfield(L,-2,"kind");
+        if(e->terminal){char request[64];opaque(request,sizeof request,e->result.generation,e->result.owner,e->result.request);lua_pushstring(L,request);lua_setfield(L,-2,"request");lua_pushstring(L,e->result.result==XMP_OK?"ok":e->result.result==XMP_INVALID?"rejected":"failed");lua_setfield(L,-2,"result");lua_pushstring(L,e->result.message);lua_setfield(L,-2,"message");}
+        else{lua_pushstring(L,e->status.text);lua_setfield(L,-2,"message");}
+    }
+    lua_call(L,slot==1 || slot==3 || slot==4 || slot==5,0); return 0;
 }
 static int call(ModState *m,lua_CFunction fn,int args,int results,int phase) {
     m->phase=phase; m->instructions=CALL_BUDGET; m->attempts=m->denied=0;
@@ -145,14 +168,14 @@ static int unavailable(ModRuntime *rt,ModState *m) {
 }
 ModRuntime *mod_runtime_start(ModPlan *plan,ModLog log,ModCancelled cancelled) {
     ModRuntime *rt=calloc(1,sizeof *rt); if (!rt) { log("mods: runtime allocation failed"); mod_ui_start_failed("Native mod runtime allocation failed; restart to retry."); return NULL; }
-    rt->plan=plan; rt->log=log;
+    rt->plan=plan; rt->log=log;rt->cancelled=cancelled;
     rt->providers=mod_providers_start(plan,log);
     unsigned processed=0;
     for (int i=0;i<plan->count;++i) {
         ModState *m=&rt->states[i]; m->runtime=rt; m->package=&plan->mods[i]; m->failed=m->package->rejected;
         strcpy(m->view.id,m->package->id);strcpy(m->view.version,m->package->version);snprintf(m->view.name,sizeof m->view.name,"%s",m->package->name[0]?m->package->name:m->package->id);
         m->view.status=m->failed?MOD_INCOMPATIBLE:MOD_STARTING;
-        for (int r=0;r<4;++r) m->refs[r]=LUA_NOREF;
+        for (int r=0;r<6;++r) m->refs[r]=LUA_NOREF;
         if (m->failed) processed|=1u<<i;
     }
     for (int step=0;step<plan->count;++step) {
@@ -168,7 +191,7 @@ ModRuntime *mod_runtime_start(ModPlan *plan,ModLog log,ModCancelled cancelled) {
         if (!m->L) { fail(m,"state allocation failed"); continue; }
         *(ModState **)lua_getextraspace(m->L)=m;
         if (call(m,setup,0,0,1) && call(m,load,0,1,2) && call(m,NULL,0,1,3) && call(m,discover,1,0,4) && call(m,invoke,0,0,5)) {
-            m->initialized=1; m->view.status=MOD_LOADED;mod_ui_publish(&m->view); message(m,"ready",m->package->version,strlen(m->package->version));
+            m->initialized=1; m->view.status=MOD_LOADED;sync_view(m);mod_ui_publish(&m->view); message(m,"ready",m->package->version,strlen(m->package->version));
         }
     }
     return rt;
@@ -212,13 +235,37 @@ static int apply_action(ModRuntime *rt,const ModAction *a) {
 int mod_runtime_action(ModRuntime *rt,const ModAction *a) {
     if(!rt)return 0;rt->aggregate=DISPATCH_BUDGET;return apply_action(rt,a);
 }
+static int action_intent(ModRuntime *rt,const ModIntent *intent) {
+    if(!mod_ui_intent_current(intent))return 0;
+    for(int i=0;i<rt->count;++i){ModState *m=&rt->states[rt->order[i]];if(strcmp(m->view.id,intent->mod)||m->failed||!m->initialized)continue;
+        if(unavailable(rt,m)){m->phase=10;fail(m,"dependency unavailable");return 0;}
+        for(int j=0;j<m->view.button_count;++j){ModButton *b=&m->view.buttons[j];if(strcmp(b->id,intent->action)||!b->enabled||m->refs[4]==LUA_NOREF)continue;
+            sync_view(m);if(b->provider&&(!m->view.provider_available||m->view.provider_pending))return 0;
+            strcpy(m->action_id,b->id);rt->aggregate-=100;call(m,invoke,0,0,10);sync_view(m);mod_ui_publish(&m->view);return 1;
+        }
+    }return 0;
+}
+static int provider_delivery(ModRuntime *rt) {
+    for(int n=0;n<rt->count;++n){int i=rt->service_cursor++%rt->count;ModState *m=&rt->states[rt->order[i]];
+        if(m->failed||!m->initialized)continue;if(unavailable(rt,m)){m->phase=11;fail(m,"dependency unavailable");continue;}
+        if(!mod_provider_take(rt->providers,(uint64_t)(m->package-rt->plan->mods)+1,&m->service_event))continue;
+        if(m->refs[5]!=LUA_NOREF){rt->aggregate-=100;call(m,invoke,0,0,11);}sync_view(m);mod_ui_publish(&m->view);return 1;
+    }return 0;
+}
 int mod_runtime_actions(ModRuntime *rt,ModCancelled cancelled) {
-    if(!rt)return 0;rt->aggregate=DISPATCH_BUDGET;ModAction a;int processed=0;
-    while(processed<8 && rt->aggregate>=100 && !(cancelled&&cancelled()) && mod_ui_pop(&a)) {apply_action(rt,&a);++processed;}
-    return processed;
+    if(!rt||rt->stopping||(cancelled&&cancelled()))return 0;rt->aggregate=DISPATCH_BUDGET;int processed=0;mod_provider_pump(rt->providers);
+    for(int i=0;i<rt->count;++i){ModState *m=&rt->states[rt->order[i]];if(!m->failed&&m->initialized){if(unavailable(rt,m)){m->phase=11;fail(m,"dependency unavailable");}else{sync_view(m);mod_ui_publish(&m->view);}}}
+    while(processed<8 && rt->aggregate>=100 && !(cancelled&&cancelled())) {
+        int work=0;for(int try=0;try<3&&!work;++try){int lane=rt->lane++%3;
+            if(lane==0){ModAction a;if(mod_ui_pop(&a)){apply_action(rt,&a);work=1;}}
+            else if(lane==1){ModIntent a;if(mod_ui_intent_pop(&a)){action_intent(rt,&a);work=1;}}
+            else work=provider_delivery(rt);
+        }if(!work)break;++processed;
+    }return processed;
 }
 void mod_runtime_stop(ModRuntime *rt) {
     if (!rt) return;
+    rt->stopping=1;
     if(!mod_providers_stop(rt->providers)){rt->log("providers: fatal cleanup failure; Lua states not closed");abort();}
     mod_providers_free(rt->providers);rt->providers=NULL;
     for (int n=rt->count-1;n>=0;--n) {
@@ -228,7 +275,7 @@ void mod_runtime_stop(ModRuntime *rt) {
             if (m->refs[2]!=LUA_NOREF) call(m,invoke,0,0,7);
             m->phase=8; m->attempts=m->denied=0; lua_close(m->L); m->L=NULL;
         }
-        for (int r=0;r<4;++r) m->refs[r]=LUA_NOREF;
+        for (int r=0;r<6;++r) m->refs[r]=LUA_NOREF;
         char line[192]; snprintf(line,sizeof line,"mods: %s closed bytes=%zu callbacks=0",m->package->id,m->used); rt->log(line);
         if (m->used) rt->log("mods: allocator accounting violation");
     }
@@ -268,9 +315,17 @@ static int settings_register(lua_State *L) {
     ModView candidate=m->view;
     schema_text(L,1,"id",candidate.page_id,sizeof candidate.page_id,1);
     schema_text(L,1,"title",candidate.title,sizeof candidate.title,0);
+    lua_pushliteral(L,"actions");lua_rawget(L,1);
+    if(!lua_isnil(L,-1)){
+        luaL_checktype(L,-1,LUA_TTABLE);size_t n=lua_rawlen(L,-1);if(!n||n>MOD_BUTTON_MAX||m->refs[4]==LUA_NOREF)return luaL_error(L,"invalid actions or missing ui.action handler");candidate.button_count=(int)n;int actions=lua_gettop(L);
+        for(size_t i=0;i<n;++i){lua_rawgeti(L,actions,(lua_Integer)i+1);luaL_checktype(L,-1,LUA_TTABLE);ModButton *b=&candidate.buttons[i];schema_text(L,-1,"id",b->id,sizeof b->id,1);schema_text(L,-1,"label",b->label,sizeof b->label,0);b->enabled=1;
+            lua_pushliteral(L,"provider");lua_rawget(L,-2);if(!lua_isnil(L,-1)){luaL_checktype(L,-1,LUA_TBOOLEAN);b->provider=lua_toboolean(L,-1);}lua_pop(L,1);
+            for(size_t j=0;j<i;++j)if(!strcmp(b->id,candidate.buttons[j].id))return luaL_error(L,"duplicate action ID");lua_pop(L,1);
+        }
+    }lua_pop(L,1);
     lua_pushliteral(L,"fields");lua_rawget(L,1);luaL_checktype(L,-1,LUA_TTABLE);
     int fields=lua_gettop(L);size_t count=lua_rawlen(L,fields);
-    if(!count || count>MOD_FIELD_MAX)return luaL_error(L,"settings field count exceeds bounds");
+    if((!count&&!candidate.button_count) || count>MOD_FIELD_MAX)return luaL_error(L,"settings field count exceeds bounds");
     candidate.field_count=(int)count;
     for(size_t i=0;i<count;++i) {
         ModField *f=&candidate.fields[i];lua_rawgeti(L,fields,(lua_Integer)i+1);luaL_checktype(L,-1,LUA_TTABLE);int table=lua_gettop(L);
@@ -306,3 +361,26 @@ static int settings_get(lua_State *L) {
     }
     return luaL_error(L,"unknown settings field");
 }
+
+static int provider_status(lua_State *L) {
+    ModState *m=owner(L);ModServiceView v;mod_provider_view(m->runtime->providers,(uint64_t)(m->package-m->runtime->plan->mods)+1,&v);
+    if(m->phase==7){v.available=0;v.pending=0;strcpy(v.text,"Provider stopped");}
+    lua_newtable(L);lua_pushboolean(L,v.available);lua_setfield(L,-2,"available");lua_pushstring(L,v.text);lua_setfield(L,-2,"message");lua_pushstring(L,v.service);lua_setfield(L,-2,"service");lua_pushinteger(L,v.pending);lua_setfield(L,-2,"pending");
+    char token[64];opaque(token,sizeof token,v.generation,v.owner,0);lua_pushstring(L,token);lua_setfield(L,-2,"handle");snprintf(token,sizeof token,"%016llx",(unsigned long long)v.capabilities);lua_pushstring(L,token);lua_setfield(L,-2,"capabilities");
+    lua_newtable(L);for(int i=0;i<v.command_count;++i){const XmsCommandSpec *c=&v.commands[i];lua_newtable(L);lua_pushstring(L,c->id);lua_setfield(L,-2,"id");lua_pushstring(L,c->type==XMS_NONE?"none":c->type==XMS_BOOL?"bool":"integer");lua_setfield(L,-2,"type");lua_pushinteger(L,c->minimum);lua_setfield(L,-2,"min");lua_pushinteger(L,c->maximum);lua_setfield(L,-2,"max");lua_rawseti(L,-2,i+1);}lua_setfield(L,-2,"commands");return 1;
+}
+static int provider_submit(lua_State *L) {
+    ModState *m=owner(L);if(!m->initialized || m->failed || m->runtime->stopping || (m->runtime->cancelled&&m->runtime->cancelled()) || m->phase==7 || m->refs[5]==LUA_NOREF){lua_pushnil(L);lua_pushliteral(L,"stopped or missing provider.event handler");return 2;}
+    luaL_checktype(L,1,LUA_TSTRING);size_t n;const char *name=lua_tolstring(L,1,&n);if(!n||n>64||memchr(name,0,n))return luaL_error(L,"invalid command ID");
+    ModServiceView v;uint64_t own=(uint64_t)(m->package-m->runtime->plan->mods)+1;mod_provider_view(m->runtime->providers,own,&v);
+    if(!v.available){lua_pushnil(L);lua_pushstring(L,v.text);return 2;}
+    const XmsCommandSpec *c=NULL;for(int i=0;i<v.command_count;++i)if(!strcmp(v.commands[i].id,name))c=&v.commands[i];if(!c)return luaL_error(L,"unknown provider command");
+    int64_t value=0;if(c->type==XMS_NONE){if(!lua_isnoneornil(L,2))return luaL_error(L,"command takes no argument");}
+    else if(c->type==XMS_BOOL){luaL_checktype(L,2,LUA_TBOOLEAN);value=lua_toboolean(L,2);}
+    else{if(!lua_isinteger(L,2))return luaL_error(L,"command requires integer");value=lua_tointeger(L,2);if(value<c->minimum||value>c->maximum)return luaL_error(L,"command integer outside range");}
+    uint64_t request=0;int result=mod_provider_submit(m->runtime->providers,own,name,(int)c->type,value,&request);
+    if(result!=XMP_OK){lua_pushnil(L);lua_pushstring(L,result==XMP_BUSY?"busy":result==XMP_INVALID?"rejected":result==XMP_INCOMPATIBLE?"unavailable":"failed");return 2;}
+    char token[64];opaque(token,sizeof token,v.generation,own,request);lua_pushstring(L,token);return 1;
+}
+static int ui_status(lua_State *L){ModState *m=owner(L);luaL_checktype(L,1,LUA_TSTRING);size_t n;const char *text=lua_tolstring(L,1,&n);if(n>256||!mod_text_valid(text,n))return luaL_error(L,"invalid bounded UI status");memcpy(m->view.ui_status,text,n);m->view.ui_status[n]=0;if(m->initialized)mod_ui_publish(&m->view);return 0;}
+static int ui_enable(lua_State *L){ModState *m=owner(L);luaL_checktype(L,1,LUA_TSTRING);luaL_checktype(L,2,LUA_TBOOLEAN);size_t n;const char *id=lua_tolstring(L,1,&n);for(int i=0;i<m->view.button_count;++i)if(strlen(m->view.buttons[i].id)==n&&!memcmp(id,m->view.buttons[i].id,n)){m->view.buttons[i].enabled=lua_toboolean(L,2);if(m->initialized)mod_ui_publish(&m->view);return 0;}return luaL_error(L,"unknown action ID");}

@@ -31,7 +31,7 @@ class Loader(unittest.TestCase):
    self.activate(text);self.host();self.assertEqual(self.markers(),'')
  def test_metadata_and_hash_preflight(self):
   self.package();self.activate();p=self.mods/'alpha/provider.ini';original=p.read_text()
-  for bad in [original.replace('owner=alpha','owner=beta'),original.replace('abi=1.0','abi=2.0'),original+'schema=1\n',original.replace('schema=1','schema=2'),original+'path=../../evil.so\n',original.replace('required=0','required=-1'),original.replace('alpha.native','wrong.native')]:
+  for bad in [original.replace('owner=alpha','owner=beta'),original.replace('abi=1.0','abi=3.0'),original+'schema=1\n',original.replace('schema=1','schema=2'),original+'path=../../evil.so\n',original.replace('required=0','required=-1'),original.replace('alpha.native','wrong.native')]:
    p.write_text(bad);self.host();self.assertEqual(self.markers(),'')
   p.write_text(original.replace(HASHKEY+'=',HASHKEY+'=00'));self.host();self.assertEqual(self.markers(),'')
  def test_unsafe_paths_and_special_files(self):
