@@ -119,3 +119,12 @@ Rendering copies native snapshots and queues actions; it never enters Lua. Actio
 Settings live beside the executable in `mod-settings/<mod-id>.ini`, independently of an overridden package root, profiles and account IDs. The bounded version-1 format uses typed values and stable enum IDs. Invalid known types/ranges, duplicates or malformed files discard the whole stored set and use declared defaults, with a visible note; startup does not overwrite the file. Missing fields use current defaults, existing valid values survive default changes, removed fields are ignored and dropped on the next successful save. Renaming a field creates a new identity. Enum reordering preserves the symbolic choice.
 
 Each save writes a temporary file and atomically replaces the previous file. Failure preserves the previous file, retains the session value and displays a warning. Close the process and replace only package files when updating scripts: settings, profiles and logs remain outside that operation. See [the candidate review](mods-ui-review.md) for validation and platform limits.
+
+
+## Settings failure recovery
+
+Missing settings use defaults silently. Unreadable, unsafe or oversized files use defaults with a bounded warning; the host reads only validated regular disk files without following links. Rejected stored values are not overwritten at startup.
+
+A failed save keeps the prior file and marks the current page unsaved. **Retry save** appears only for an unsaved page. It submits the current value to retry writing the whole page; success clears the unsaved state. Retrying an unchanged value does not deliver `settings.changed` again. Faulted pages retain the layout but cannot retry. Closing the page cancels an unstarted retry under the same rules as other settings actions.
+
+If the native mod worker or runtime cannot start, eligible packages show Faulted with a restart diagnostic; disabled and incompatible package statuses remain unchanged.
