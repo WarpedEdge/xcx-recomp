@@ -20,11 +20,11 @@ def main():
         image=Image.open(path).convert('RGBA');assert image.size==(64,64)
         packed=zstd.compress(image.tobytes(),level=19)
         rows.append((asset,len(blob),len(packed)));blob.extend(packed)
-    assert len(rows)<=64
+    assert len(rows)<=128
     lines=['// Licensed Kenney CC0 derivatives. Reproduce with tools/make_glyph_styles.py.',
            '// Provenance: assets/appendage-glyph/styles/provenance.json. No game pixels.',
-           'static const struct { int style, input; unsigned offset, length; const char *name; } glyph_arts[] = {']
-    for asset,off,size in rows:lines.append(f'    {{GLYPH_{asset["style"]}, {asset["input"]}, {off}, {size}, "{asset["file"]}"}},')
+           'static const struct { int style, input, appearance; unsigned offset, length; const char *name; } glyph_arts[] = {']
+    for asset,off,size in rows:lines.append(f'    {{GLYPH_{asset["style"]}, {asset["input"]}, GLYPH_{asset.get("appearance","STANDARD")}, {off}, {size}, "{asset["file"]}"}},')
     lines+=['};','static const unsigned char glyph_art_bytes[] = {']
     for i in range(0,len(blob),20):lines.append('    '+','.join(f'0x{x:02x}' for x in blob[i:i+20])+',')
     lines+=['};','']

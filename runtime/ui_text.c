@@ -125,15 +125,18 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_RUMBLE_CURVE_DESC] = "Lower values make weak vibration stronger.",
     [UI_MENU_RUMBLE_TRIGGERS] = "Trigger vibration (Xbox)",
     [UI_MENU_RUMBLE_TRIGGERS_DESC] = "Vibrates the triggers of an Xbox controller too.",
-    [UI_MENU_GLYPH_STYLE] = "Appendage glyph style (experimental)",
-    [UI_MENU_GLYPH_STYLE_DESC] = "Changes only the enemy-targeting Appendage guide in verified XCX 2.0.0. "
+    [UI_MENU_GLYPH_STYLE] = "HUD glyph style (experimental)",
+    [UI_MENU_GLYPH_STYLE_DESC] = "Changes the verified Appendage and shared weapon-change/field A/Target/Board guides in XCX 2.0.0. "
         "Automatic follows intentional keyboard/mouse or exposed controller activity. Manual styles change artwork only, "
-        "not bindings or button layout. Supported letters, digits, left/right mouse and standard face/shoulder buttons use licensed glyphs. "
+        "not bindings or button layout. Original keeps game rendering unchanged; Automatic also uses native virtual labels for detected Nintendo controllers. Custom bindings do not relabel native artwork. Supported letters, digits, Space, left/right mouse and standard face/shoulder buttons use licensed glyphs. "
         "Unbound, multiple, shared or unsupported bindings retain original Switch virtual labels; the status explains the fallback. "
-        "The guide still hides normally. Other HUD, menu and tutorial prompts are unchanged.",
+        "The guide still hides normally. Other HUD, menu and tutorial paths retain their original artwork.",
+    [UI_MENU_GLYPH_APPEARANCE] = "Glyph appearance",
+    [UI_MENU_GLYPH_APPEARANCE_DESC] = "Colored face buttons uses Kenney's colored PlayStation, Xbox and Steam face buttons. "
+        "Other buttons, keyboard/mouse and native Nintendo artwork keep Standard. Automatic honors this choice. Bindings are unchanged.",
     [UI_MENU_GLYPH_UNSUPPORTED] = "Available only for the verified XCX 2.0.0 build",
     [UI_MENU_PAD_LAYOUT] = "Button layout",
-    [UI_MENU_PAD_LAYOUT_DESC] = "Which button is A. Nintendo: the right one, as on a Switch. Xbox: the bottom one, as "
+    [UI_MENU_PAD_LAYOUT_DESC] = "Changes physical input mappings, independently of glyph artwork. Which button is A. Nintendo: the right one, as on a Switch. Xbox: the bottom one, as "
                                 "labelled on an Xbox controller (cross on a PlayStation controller). Automatic picks "
                                 "Nintendo for controllers with Nintendo labels and Xbox for the others.",
     [UI_MENU_PAD_LAYOUT_AUTO] = "Automatic", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo (A right)",

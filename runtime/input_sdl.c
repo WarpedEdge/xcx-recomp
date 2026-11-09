@@ -236,7 +236,7 @@ void ikb_intent_mouse_take(int32_t *dx, int32_t *dy) {
 }
 
 int ikb_glyph_key(int key) {
-    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R) return key;
+    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R || key == KEY_SPACE) return key;
     SDL_Scancode sc = key_sc(key);
     if (sc == SDL_SCANCODE_UNKNOWN) return KEY_NONE;
     SDL_Keycode label = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);

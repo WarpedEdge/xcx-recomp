@@ -62,7 +62,7 @@ int glyph_style_parse(const char *value) {
     return GLYPH_ORIGINAL;
 }
 const char *glyph_style_name(int style) { return style >= 0 && style < GLYPH_STYLE_COUNT ? names[style] : names[0]; }
-GlyphDecision glyph_decide(int preference, int source, int family, int layout, const InputMap *map) {
+static GlyphDecision decide(int preference, int source, int family, int layout, const InputMap *map, const int *actions, int count) {
     GlyphDecision d = {.style = preference, .art = {-1,-1,-1}, .reason = NULL};
     if (preference < 0 || preference >= GLYPH_STYLE_COUNT) d.style = GLYPH_ORIGINAL;
     if (d.style == GLYPH_AUTO) {
@@ -73,16 +73,16 @@ GlyphDecision glyph_decide(int preference, int source, int family, int layout, c
             if (family == GLYPH_PAD_UNKNOWN) d.reason = "Original virtual labels: controller family is unknown";
         } else { d.style = GLYPH_ORIGINAL; d.reason = "Original virtual labels: waiting for intentional input"; }
     }
+    // Original, including Automatic on Nintendo controllers, retains native virtual artwork.
     if (d.style == GLYPH_ORIGINAL) return d;
     if (d.style != GLYPH_KEYBOARD && (layout < 0 || layout >= PAD_LAYOUT_COUNT)) {
         d.reason = "Original virtual labels: no exposed controller bindings"; goto fallback;
     }
-    static const int actions[3] = {B_R,B_Y,B_A};
-    for (int n = 0; n < 3; n++) {
+    for (int n = 0; n < count; n++) {
         uint8_t inputs[INPUT_BINDING_MAX];
         int count = d.style == GLYPH_KEYBOARD ? input_map_keys_of(map, actions[n], inputs, sizeof inputs) :
                     input_map_pads_of(map, actions[n], layout, inputs, sizeof inputs);
-        if (count != 1) { d.reason = "Original virtual labels: an Appendage action is unbound or has multiple bindings"; goto fallback; }
+        if (count != 1) { d.reason = "Original virtual labels: a guide action is unbound or has multiple bindings"; goto fallback; }
         if (d.style == GLYPH_KEYBOARD && inputs[0] == KEY_NONE) { d.reason = "Original virtual labels: unsupported keyboard label"; goto fallback; }
         if (d.style == GLYPH_KEYBOARD) {
             for (int i = 0; i < map->nkeys; i++) if (map->keys[i].key == inputs[0] && map->keys[i].action != actions[n]) {
@@ -102,23 +102,56 @@ fallback:
     for (int i = 0; i < 3; i++) d.art[i] = -1;
     return d;
 }
+GlyphDecision glyph_decide(int preference, int source, int family, int layout, const InputMap *map) {
+    static const int actions[3] = {B_R,B_Y,B_A};
+    return decide(preference,source,family,layout,map,actions,3);
+}
+GlyphDecision glyph_decide_button(int preference, int source, int family, int layout, const InputMap *map, int action) {
+    // Only the verified shared-widget actions are supported by this adapter.
+    if (action != B_X && action != B_A && action != B_R && action != B_ZL) return (GlyphDecision){.style=GLYPH_ORIGINAL,.art={-1,-1,-1},.reason="Original virtual label: unsupported guide action"};
+    return decide(preference,source,family,layout,map,&action,1);
+}
 int glyph_build_supported(void) {
     for (int i = 0; i < rt_exefs_sha256_count; i++)
         if (!strcmp(rt_exefs_sha256[i].file,"main"))
             return !strcmp(rt_exefs_sha256[i].sha256,"0a9dbf1f3816dd0fab0a08883d538c74d9b9fd7d939cb29aaf0947d71a201026");
     return 0;
 }
+int glyph_appearance_parse(const char *value) { return value && !strcmp(value,"colored") ? GLYPH_COLORED : GLYPH_STANDARD; }
+static GlyphDecision appearance(GlyphDecision d) {
+    int variant = glyph_appearance_parse(cfg_value("XCX_GLYPH_APPEARANCE"));
+    for (int i=0;i<3;i++) if (d.art[i]>=0) d.art[i]=glyph_art_variant(d.art[i],variant);
+    return d;
+}
 GlyphDecision glyph_current_decision(void) {
     int source, family, layout; InputMap map;
     input_glyph_snapshot(&source,&family,&layout,&map);
-    return glyph_decide(glyph_style_parse(cfg_value("XCX_GLYPH_STYLE")),source,family,layout,&map);
+    return appearance(glyph_decide(glyph_style_parse(cfg_value("XCX_GLYPH_STYLE")),source,family,layout,&map));
+}
+GlyphDecision glyph_current_button(int action) {
+    int source,family,layout; InputMap map;
+    input_glyph_snapshot(&source,&family,&layout,&map);
+    return appearance(glyph_decide_button(glyph_style_parse(cfg_value("XCX_GLYPH_STYLE")),source,family,layout,&map,action));
 }
 const char *glyph_status(void) {
-    static _Thread_local char status[256];
-    GlyphDecision d = glyph_current_decision();
-    const char *note = d.reason;
-    // Node construction/retirement can change the note between separate reads.
-    if (!note && d.style != GLYPH_ORIGINAL) note = appendage_glyph_runtime_note();
-    snprintf(status,sizeof status,"Appendage only — %s",note ? note : glyph_style_name(d.style));
+    static _Thread_local char status[1280];
+    int source,family,layout; InputMap map;
+    input_glyph_snapshot(&source,&family,&layout,&map);
+    int preference = glyph_style_parse(cfg_value("XCX_GLYPH_STYLE"));
+    GlyphDecision d = glyph_decide(preference,source,family,layout,&map);
+    GlyphDecision weapon = glyph_decide_button(preference,source,family,layout,&map,B_X);
+    GlyphDecision target = glyph_decide_button(preference,source,family,layout,&map,B_R);
+    GlyphDecision board = glyph_decide_button(preference,source,family,layout,&map,B_ZL);
+    GlyphDecision field = glyph_decide_button(preference,source,family,layout,&map,B_A);
+    const char *note = preference != GLYPH_ORIGINAL ? appendage_glyph_runtime_note() : NULL;
+    if (note) snprintf(status,sizeof status,"Verified HUD guides — %s",note);
+    else if (d.reason || weapon.reason || field.reason || target.reason || board.reason)
+        snprintf(status,sizeof status,"Appendage: %s; weapon: %s; field A: %s; Target: %s; Board: %s",
+            d.reason ? d.reason : glyph_style_name(d.style),
+            weapon.reason ? weapon.reason : glyph_style_name(weapon.style),
+            field.reason ? field.reason : glyph_style_name(field.style),
+            target.reason ? target.reason : glyph_style_name(target.style),
+            board.reason ? board.reason : glyph_style_name(board.style));
+    else snprintf(status,sizeof status,"Verified HUD guides — %s",glyph_style_name(d.style));
     return status;
 }

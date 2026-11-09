@@ -1,10 +1,13 @@
-"""Six verified XCX 2.0.0 sites for experimental Appendage glyph styles."""
+"""Verified XCX 2.0.0 sites for experimental Appendage glyph styles."""
 
 BUILD = 'ec4ed46bbc4a9ebbe7ce0af7a4a8ebbc09e5724a'
 SHA256 = '0a9dbf1f3816dd0fab0a08883d538c74d9b9fd7d939cb29aaf0947d71a201026'
 WORDS = {0x60f68c: 0x940c224d, 0xa27678: 0x9400802a,
          0x60f6a8: 0x940c2246, 0x60f6c4: 0x940c223f,
-         0xa2fac0: 0xa9bd7bfd, 0xa2fcd0: 0xd10203ff}
+         0xa2fac0: 0xa9bd7bfd, 0xa2fcd0: 0xd10203ff,
+         0x5a665c: 0x9400d0c6, 0x5c6ed4: 0x94004ea8, 0x55ff1c: 0x9412f42b,
+         0x5da974: 0x2a0103e2, 0x5da984: 0x17fe154f,
+         0x55fec0: 0xa9bd7bfd, 0x55fecc: 0x910003fd}
 
 
 def verified(mod):
@@ -27,6 +30,9 @@ def call(mod, address, target):
     if offset in (0x60f68c, 0x60f6a8, 0x60f6c4):
         assert target == mod.base + 0x917fc0
         return f'appendage_glyph_attach(c); f_{target:x}(c);'
+    if offset == 0x55ff1c:
+        assert target == mod.base + 0xa1cfc8
+        return f'appendage_glyph_lookup_attach(c, c->x[29]); f_{target:x}(c);'
     if offset == 0xa27678:
         assert target == mod.base + 0xa47720
         return f'appendage_glyph_bind(c, c->x[19], f_{target:x});'

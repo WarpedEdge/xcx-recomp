@@ -1,11 +1,12 @@
-// Display policy for the verified Appendage guide. Never changes input mapping or emitted inputs.
+// Display policy for the verified HUD guides. Never changes input mapping or emitted inputs.
 #pragma once
 #include <stdint.h>
 #include "input_map.h"
 enum { GLYPH_ORIGINAL, GLYPH_AUTO, GLYPH_PLAYSTATION, GLYPH_XBOX, GLYPH_STEAM, GLYPH_KEYBOARD, GLYPH_STYLE_COUNT };
+enum { GLYPH_STANDARD, GLYPH_COLORED };
 enum { GLYPH_SOURCE_NONE, GLYPH_SOURCE_KEYBOARD, GLYPH_SOURCE_PAD };
 enum { GLYPH_PAD_UNKNOWN, GLYPH_PAD_SWITCH, GLYPH_PAD_PS, GLYPH_PAD_XBOX, GLYPH_PAD_STEAM };
-enum { GLYPH_ART_MAX = 64 };
+enum { GLYPH_ART_MAX = 128 };
 typedef struct {
     uint8_t keys[KEY_COUNT];
     uint32_t buttons;
@@ -31,8 +32,12 @@ GlyphDecision glyph_decide(int preference, int source, int family, int layout, c
 void input_glyph_snapshot(int *source, int *family, int *layout, InputMap *map);
 int glyph_build_supported(void);
 GlyphDecision glyph_current_decision(void);
+GlyphDecision glyph_current_button(int action);
+GlyphDecision glyph_decide_button(int preference, int source, int family, int layout, const InputMap *map, int action);
 const char *glyph_status(void); // Thread-local copied status for the experimental Controls row.
 int glyph_art_find(int style, int physical);
+int glyph_art_variant(int art, int appearance);
+int glyph_appearance_parse(const char *value);
 const char *glyph_art_name(unsigned art);
 unsigned glyph_art_count(void);
-int glyph_art_pixels(unsigned art, uint32_t *pixels); // 512x192 owned destination, all three verified UV tiles.
+int glyph_art_pixels(unsigned art, uint32_t *pixels); // 512x192 owned destination, all five verified UV tiles.

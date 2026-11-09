@@ -6,8 +6,8 @@
 #include "host.h"
 const RtFileHash rt_exefs_sha256[]={{"main","0a9dbf1f3816dd0fab0a08883d538c74d9b9fd7d939cb29aaf0947d71a201026"}};
 const int rt_exefs_sha256_count=1;
-static const char *pref="auto";
-const char *cfg_value(const char *name){(void)name;return pref;}
+static const char *pref="auto", *variant="standard";
+const char *cfg_value(const char *name){return !strcmp(name,"XCX_GLYPH_APPEARANCE") ? variant : pref;}
 const char *cfg_get(const char *name){(void)name;return NULL;}
 void rt_log(const char *fmt,...){(void)fmt;}
 static unsigned runtime_note_calls;
@@ -74,8 +74,34 @@ int main(void){
  pref="playstation";CHECK(glyph_current_decision().style==GLYPH_PLAYSTATION);pref="auto";CHECK(glyph_current_decision().style==GLYPH_KEYBOARD);
  runtime_note="Original virtual labels: glyph history exhausted; restart game to restore styles";
  CHECK(strstr(glyph_status(),"history exhausted; restart"));CHECK(runtime_note_calls==1);
+ // The new weapon guide reports its own unsupported remap even if Appendage is supported.
+ runtime_note=NULL;
+ for(int i=0;i<input_map.nkeys;i++)if(input_map.keys[i].action==B_X)input_map.keys[i].key=KEY_F12;
+ CHECK(strstr(glyph_status(),"weapon: Original virtual labels"));input_map=original;
+ CHECK(glyph_decide_button(GLYPH_KEYBOARD,GLYPH_SOURCE_KEYBOARD,GLYPH_PAD_PS,1,&input_map,B_X).art[0]==glyph_art_find(GLYPH_KEYBOARD,KEY_SPACE));
+ CHECK(glyph_decide_button(GLYPH_XBOX,GLYPH_SOURCE_PAD,GLYPH_PAD_XBOX,1,&input_map,B_A).art[0]==glyph_art_find(GLYPH_XBOX,PAD_SOUTH));
+ CHECK(glyph_decide_button(GLYPH_XBOX,GLYPH_SOURCE_PAD,GLYPH_PAD_XBOX,1,&input_map,B_B).style==GLYPH_ORIGINAL);
+ CHECK(glyph_style_parse("switch")==GLYPH_ORIGINAL);
+ CHECK(glyph_decide(GLYPH_ORIGINAL,GLYPH_SOURCE_KEYBOARD,GLYPH_PAD_PS,-1,&m).style==GLYPH_ORIGINAL);
+ CHECK(glyph_decide(GLYPH_ORIGINAL,GLYPH_SOURCE_PAD,GLYPH_PAD_SWITCH,1,&m).art[0]==-1);
+ CHECK(glyph_decide(GLYPH_ORIGINAL,GLYPH_SOURCE_PAD,GLYPH_PAD_PS,1,&m).art[0]==-1);
+ CHECK(glyph_appearance_parse("colored")==GLYPH_COLORED);CHECK(glyph_appearance_parse("unknown")==GLYPH_STANDARD);
+ for(int style=GLYPH_PLAYSTATION;style<=GLYPH_STEAM;style++) {
+  for(int physical=PAD_SOUTH;physical<=PAD_NORTH;physical++) {
+   int standard=glyph_art_find(style,physical), colored=glyph_art_variant(standard,GLYPH_COLORED);
+   CHECK(colored>=63 && colored<75);CHECK(colored!=standard);CHECK(glyph_art_variant(standard,GLYPH_STANDARD)==standard);
+   CHECK(strstr(glyph_art_name(colored),"color_"));
+  }
+  CHECK(glyph_art_variant(glyph_art_find(style,PAD_R),GLYPH_COLORED)==glyph_art_find(style,PAD_R));
+ }
+ pref="playstation";variant="colored";d=glyph_current_decision();
+ CHECK(d.art[0]==glyph_art_find(GLYPH_PLAYSTATION,PAD_R));CHECK(strstr(glyph_art_name(d.art[1]),"color_"));
+ CHECK(strstr(glyph_art_name(glyph_current_button(B_X).art[0]),"color_square"));
+ pref="auto";CHECK(glyph_current_button(B_X).art[0]==glyph_art_find(GLYPH_KEYBOARD,KEY_SPACE));
+ pref="original";CHECK(glyph_current_button(B_X).art[0]==-1);CHECK(strstr(glyph_status(),"Original"));
+ pref="auto";variant="standard";
  for(unsigned art=0;art<glyph_art_count();art++){uint32_t pixels[512*192];CHECK(glyph_art_pixels(art,pixels));
-  for(int y=0;y<64;y++)CHECK(!memcmp(pixels+y*512+384,pixels+(y+64)*512+384,256));
+  for(int y=0;y<64;y++){CHECK(!memcmp(pixels+(y+64)*512+448,pixels+y*512+320,256));CHECK(!memcmp(pixels+y*512+320,pixels+y*512+384,256));CHECK(!memcmp(pixels+y*512+384,pixels+(y+64)*512+384,256));}
  }
  printf("%u policy, action/binding, intent, reconnect/focus/held, pointer and licensed tile checks passed\n",checks);
 }

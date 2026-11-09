@@ -438,6 +438,109 @@
       "member": "Keyboard & Mouse/Default/mouse_right.png",
       "sha256": "da09ac410a994483f25d750a67765cfdc1166b14cdafd52e8ab9cf6f9a125c6e",
       "file": "mouse_right.png"
+    },
+    {
+      "style": "KEYBOARD",
+      "input": "KEY_SPACE",
+      "member": "Keyboard & Mouse/Default/keyboard_space.png",
+      "sha256": "8ce6f043b05888bd1655f7660f8f7cc02acb6c763fecf358fef20405239524bf",
+      "file": "keyboard_space.png"
+    },
+    {
+      "style": "PLAYSTATION",
+      "input": "PAD_SOUTH",
+      "member": "PlayStation Series/Default/playstation_button_color_cross.png",
+      "sha256": "e574bf4fd03b60affb8a0fb3b902c7e7435edfce0f9db47c2a6061bd8694ac93",
+      "file": "playstation_button_color_cross.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "PLAYSTATION",
+      "input": "PAD_EAST",
+      "member": "PlayStation Series/Default/playstation_button_color_circle.png",
+      "sha256": "e69732b8abd1510fce1d3417202ca7cf48a551abc6f26b0c1fbe2b08d899b3f0",
+      "file": "playstation_button_color_circle.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "PLAYSTATION",
+      "input": "PAD_WEST",
+      "member": "PlayStation Series/Default/playstation_button_color_square.png",
+      "sha256": "ab302eefb2a75e84b9271ac10ca14e63d6251af75f31194264597d53b50dfc15",
+      "file": "playstation_button_color_square.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "PLAYSTATION",
+      "input": "PAD_NORTH",
+      "member": "PlayStation Series/Default/playstation_button_color_triangle.png",
+      "sha256": "d87755a284daabffa0dbe6c62cfbfd4581a632a00717c992da6780388cd092b5",
+      "file": "playstation_button_color_triangle.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "XBOX",
+      "input": "PAD_SOUTH",
+      "member": "Xbox Series/Default/xbox_button_color_a.png",
+      "sha256": "e4158c16e2aca817503819bba998dc4d749327b8168ddd9dd19090860563badf",
+      "file": "xbox_button_color_a.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "XBOX",
+      "input": "PAD_EAST",
+      "member": "Xbox Series/Default/xbox_button_color_b.png",
+      "sha256": "89292cbfe1bd0eb977021e43281bd3e2be8dde35754b65f4b16b3a6d39355343",
+      "file": "xbox_button_color_b.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "XBOX",
+      "input": "PAD_WEST",
+      "member": "Xbox Series/Default/xbox_button_color_x.png",
+      "sha256": "1f33f62d907046f5c3a5d3e1b5171d68f30d46c9a81c2424e4e5e5d817636a70",
+      "file": "xbox_button_color_x.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "XBOX",
+      "input": "PAD_NORTH",
+      "member": "Xbox Series/Default/xbox_button_color_y.png",
+      "sha256": "b094eed6dca5de043597e7b3b24caf89d811a3e7711ebdf831992f70aa711a99",
+      "file": "xbox_button_color_y.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "STEAM",
+      "input": "PAD_SOUTH",
+      "member": "Steam Controller/Default/steam_button_color_a.png",
+      "sha256": "e4158c16e2aca817503819bba998dc4d749327b8168ddd9dd19090860563badf",
+      "file": "steam_button_color_a.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "STEAM",
+      "input": "PAD_EAST",
+      "member": "Steam Controller/Default/steam_button_color_b.png",
+      "sha256": "89292cbfe1bd0eb977021e43281bd3e2be8dde35754b65f4b16b3a6d39355343",
+      "file": "steam_button_color_b.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "STEAM",
+      "input": "PAD_WEST",
+      "member": "Steam Controller/Default/steam_button_color_x.png",
+      "sha256": "1f33f62d907046f5c3a5d3e1b5171d68f30d46c9a81c2424e4e5e5d817636a70",
+      "file": "steam_button_color_x.png",
+      "appearance": "COLORED"
+    },
+    {
+      "style": "STEAM",
+      "input": "PAD_NORTH",
+      "member": "Steam Controller/Default/steam_button_color_y.png",
+      "sha256": "b094eed6dca5de043597e7b3b24caf89d811a3e7711ebdf831992f70aa711a99",
+      "file": "steam_button_color_y.png",
+      "appearance": "COLORED"
     }
   ]
 }

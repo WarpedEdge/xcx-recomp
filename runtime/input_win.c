@@ -222,7 +222,7 @@ void ikb_intent_mouse_take(int32_t *dx, int32_t *dy) {
 }
 
 int ikb_glyph_key(int key) {
-    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R) return key;
+    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R || key == KEY_SPACE) return key;
     UINT label = MapVirtualKeyW((UINT)key_vk(key), MAPVK_VK_TO_CHAR);
     if (label >= 'A' && label <= 'Z') return KEY_A + (int)(label - 'A');
     if (label >= '0' && label <= '9') return KEY_0 + (int)(label - '0');

@@ -42,9 +42,10 @@ int __wrap_main(int argc, char **argv) {
     FILE *file = fopen(settings,"wb"); assert(file);
     fputs("pad_layout = xbox\nbind_R = key:r,pad:r\n",file); fclose(file);
     assert(cfg_load(settings));
-    cfg_set("XCX_GLYPH_STYLE","keyboard"); assert(cfg_save_to(settings));
+    cfg_set("XCX_GLYPH_STYLE","original"); cfg_set("XCX_GLYPH_APPEARANCE","colored"); assert(cfg_save_to(settings));
     assert(cfg_load(settings));
-    assert(!strcmp(cfg_value("XCX_GLYPH_STYLE"),"keyboard"));
+    assert(!strcmp(cfg_value("XCX_GLYPH_STYLE"),"original"));
+    assert(!strcmp(cfg_value("XCX_GLYPH_APPEARANCE"),"colored"));
     assert(!strcmp(cfg_value("XCX_PAD_LAYOUT"),"xbox"));
     assert(!strcmp(cfg_value("XCX_BIND_R"),"key:r,pad:r"));
     assert(vk_init());

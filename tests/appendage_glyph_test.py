@@ -25,6 +25,7 @@ def run(command, env=None, log=None):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--gpu-build', type=Path)
+    p.add_argument('--gpu-compile-only', action='store_true', help='With --gpu-build, prepare fixtures without starting GPU/SDL tests')
     p.add_argument('--cc', default='clang')
     p.add_argument('--out', type=Path, default=ROOT/'build/appendage-tests',
                    help='Separate fixture output directory; use a new path to preserve earlier evidence')
@@ -48,6 +49,8 @@ def main():
     run([sys.executable, ROOT/'tools/make_glyph_styles.py', '--out', out/'styles.inc'])
     assert (out/'styles.inc').read_bytes() == (ROOT/'runtime/glyph_art.inc').read_bytes()
     run([unit, 'enabled'], env, out/'unit-enabled.log')
+    run([unit, 'guides'], env, out/'unit-guides.log')
+    run([unit, 'resources'], env, out/'unit-resources.log')
     run([unit, 'disabled'], dict(env, XCX_APPENDAGE_GLYPH='0'), out/'unit-disabled.log')
     run([sys.executable, ROOT/'tools/make_appendage_glyph.py', '--out', out/'pixels.inc'])
     assert (out/'pixels.inc').read_bytes() == (ROOT/'runtime/appendage_r1.inc').read_bytes()
@@ -91,6 +94,10 @@ def main():
     assert not hooks.verified(module)
     assert hooks.call(module, module.base+0x60f68c, module.base+0x917fc0).startswith('appendage_glyph_attach')
     assert 'appendage_glyph_bind' in hooks.call(module, module.base+0xa27678, module.base+0xa47720)
+    for site in (0x5a665c,0x5c6ed4):
+        assert 'appendage_glyph_guide' not in hooks.call(module,module.base+site,module.base+0x5da974)
+    assert 'appendage_glyph_lookup_attach' in hooks.call(module,module.base+0x55ff1c,module.base+0xa1cfc8)
+    assert 'appendage_glyph_' not in hooks.call(module,module.base+0x55ff20,module.base+0xa1cfc8)
     assert hooks.entry(module, module.base+0xa2fac0) and hooks.entry(module, module.base+0xa2fcd0)
     assert not hooks.entry(module, module.base+0xa2fac4)
     print('Licensed pixels, exact hook identity/rejection and unrelated entry checks passed')
@@ -116,6 +123,9 @@ def main():
     sdl_rsp.write_text('\n'.join('"'+str(x)+'"' for x in sdl_objects+[sdl_obj]))
     sdl = out/'sdl'
     run([args.cc, '-fuse-ld=lld', '-no-pie', '-Wl,--wrap=main', '@'+str(sdl_rsp), '-lvulkan', '-lSDL3', '-lopus', '-lvpx', '-lzstd', '-l:libstdc++.a', '-lm', '-lpthread', '-ldl', '-Wl,-rpath,'+str(build), '-o', sdl])
+    if args.gpu_compile_only:
+        print('GPU and SDL fixtures compiled only; no GPU/SDL tests started.')
+        return
     run([sdl],env,out/'sdl.log')
     for stage in ('normal', 'pixels', 'image', 'upload', 'view', 'source'):
         stage_env = dict(env, XCX_VK_VALIDATION='1', GLYPH_TEST_CONFIG=str(out/f'settings-{stage}.ini'))

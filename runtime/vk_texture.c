@@ -1127,6 +1127,18 @@ static Tex *appendage_image[GLYPH_ART_MAX];
 static uint32_t *appendage_pixels[GLYPH_ART_MAX];
 static uint8_t appendage_attempted[GLYPH_ART_MAX];
 
+void vk_glyph_resource_observe(uint64_t handle, unsigned event) {
+    unsigned id=(unsigned)(handle&0xfffff);
+    lock();
+    if (!(handle>>32) && id<(unsigned)ntslots && tslots[id].used) {
+        const tex_t *t=&tslots[id].t;
+        rt_log("glyph resource probe %u: original handle %llx texture %u serial %llu storage %llx size %ux%u format %u view %d",
+               event,(unsigned long long)handle,id,(unsigned long long)t->serial,
+               (unsigned long long)(uintptr_t)t->mem,t->d.width,t->d.height,t->d.format,tslots[id].has_view);
+    } else rt_log("glyph resource probe %u: original handle %llx has no plain registered texture",event,(unsigned long long)handle);
+    unlock();
+}
+
 // Snapshot registration identity at recording, before a command copy can outlive or reuse its slot.
 int vk_appendage_capture_source(uint64_t handle) {
     int id = (int)(handle & 0xfffff), valid = 0;
