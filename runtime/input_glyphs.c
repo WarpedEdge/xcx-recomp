@@ -111,6 +111,19 @@ GlyphDecision glyph_decide_button(int preference, int source, int family, int la
     if (action != B_X && action != B_A && action != B_R && action != B_ZL) return (GlyphDecision){.style=GLYPH_ORIGINAL,.art={-1,-1,-1},.reason="Original virtual label: unsupported guide action"};
     return decide(preference,source,family,layout,map,&action,1);
 }
+static const int inline_actions[GLYPH_INLINE_SET] = {B_A, B_B, B_X, B_Y, B_L, B_R, B_ZL, B_ZR};
+void glyph_decide_inline_set(int preference, int source, int family, int layout, const InputMap *map, int appearance, int8_t art[GLYPH_INLINE_SET]) {
+    for (int i = 0; i < GLYPH_INLINE_SET; i++) {
+        GlyphDecision d = decide(preference, source, family, layout, map, &inline_actions[i], 1);
+        art[i] = d.style != GLYPH_ORIGINAL && d.art[0] >= 0 ? (int8_t)glyph_art_variant(d.art[0], appearance) : -1;
+    }
+}
+void glyph_current_inline_set(int8_t art[GLYPH_INLINE_SET]) {
+    int source, family, layout; InputMap map;
+    input_glyph_snapshot(&source, &family, &layout, &map);
+    glyph_decide_inline_set(glyph_style_parse(cfg_value("XCX_GLYPH_STYLE")), source, family, layout, &map,
+                            glyph_appearance_parse(cfg_value("XCX_GLYPH_APPEARANCE")), art);
+}
 int glyph_build_supported(void) {
     for (int i = 0; i < rt_exefs_sha256_count; i++)
         if (!strcmp(rt_exefs_sha256[i].file,"main"))

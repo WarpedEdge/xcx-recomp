@@ -4,6 +4,8 @@ This trial starts from the reviewed `feature/input-glyph-styles` baseline on bra
 
 Appendage, weapon styles and the NPC interaction field-A instance are owner-accepted. Other field-A captions, Target R and Board ZL remain visually unconfirmed. HUD + hints, Settings reset X, tutorial inline icons and Soul Challenge B remain native. The completed resource probe captured no matching samples on its scoped type-1 route. Continue from [the resource report](prompt-actionable-resources.md); do not repeat accepted gameplay checks or the same empty probe.
 
+Trial finding (corrected after the first owner run): `[ST:icon p1=…]` is converted to `[ML:icon …]`, which the text layouter handles through `f_7000a21afc`. The first `XCX_GLYPH_TEXT_PROBE` hooked the wrong vtable slot and the glyph pass and is removed. A corrected read-only probe, `XCX_GLYPH_ICON_PROBE=1`, ran once: layout, draw binds and a 368×300 texture share one 48-record icon source (runtime results in the report below); the Auto-attacking page itself is not isolated. The route (separating static, lifted-code and runtime evidence), the probe's bounds and the owner checklist are in [the inline text route report](glyph-inline-text-route.md).
+
 ## Local build prerequisites
 
 The trial checkout contains source, licensed Kenney tiles and reproducible licensed derivatives. It does not contain ExeFS/RomFS, extracted atlases, generated guest C, binaries, profiles, old diagnostic scripts or recordings. Those remain ignored in the accepted feature/recovery worktrees; consult them read-only without overwriting evidence.

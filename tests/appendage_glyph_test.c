@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include "../runtime/appendage_glyph.c"
+#include "inline_atlas_fixture.h"
 static InputMap mapping;
 static int pad_layout = PAD_LAYOUT_XBOX, hash_ok = 1, source = GLYPH_SOURCE_PAD, family = GLYPH_PAD_PS;
 static const char *preference = "playstation", *appearance_preference = "standard";
@@ -12,12 +13,37 @@ static uint64_t ticks, serial = 9, storage = 100, observed;
 static unsigned observations;
 static int probe_kind=-1;
 static unsigned probe_handles;
-void vk_glyph_resource_observe(uint64_t h, unsigned event) { assert(h==0x10400338 && event); probe_handles++; }
+static unsigned last_observed_event;
+static void sample_line(const char *text);
+// ICON_PROBE_SAMPLE=<file> appends the probe's log lines, so an analysis tool can be checked against the real producer. The
+// texture line mirrors the format string of vk_glyph_resource_observe in runtime/vk_texture.c.
+static void sample_line(const char *text) {
+    const char *path = getenv("ICON_PROBE_SAMPLE");
+    FILE *f = path ? fopen(path, "a") : NULL;
+    if (f) { fprintf(f, "[host] %s\n", text); fclose(f); }
+}
+static uint64_t inline_captured_handle, inline_captured_storage;
+static int inline_capture_ok = 1;
+int vk_inline_capture_source(uint64_t handle, uint64_t storage) {
+    inline_captured_handle = handle; inline_captured_storage = storage;
+    return inline_capture_ok;
+}
+void vk_glyph_resource_observe(uint64_t h, unsigned event) {
+    assert(h==0x10400338 && event); probe_handles++; last_observed_event=event;
+    char line[200];
+    snprintf(line, sizeof line, "glyph resource probe %u: original handle %llx texture %u serial %llu storage %llx size %ux%u format %u view %d",
+             event, (unsigned long long)h, 813u, 1553ull, 0x48e4f2000ull, 368u, 300u, 77u, 0);
+    sample_line(line);
+}
 const RtFileHash rt_exefs_sha256[] = {{"main","0a9dbf1f3816dd0fab0a08883d538c74d9b9fd7d939cb29aaf0947d71a201026"}};
 const int rt_exefs_sha256_count = 1;
 const char *cfg_value(const char *name) { return !strcmp(name,"XCX_GLYPH_APPEARANCE") ? appearance_preference : preference; }
 const char *cfg_get(const char *name) { (void)name; return NULL; }
-void rt_log(const char *fmt, ...) { (void)fmt; }
+static char last_log[2048];   // Same capacity as rt_log, so long probe lines are not cut.
+void rt_log(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt); vsnprintf(last_log, sizeof last_log, fmt, ap); va_end(ap);
+    if (strstr(last_log, "icon probe")) sample_line(last_log);
+}
 void plat_once(PlatOnce *o, void (*fn)(void *), void *p) { if (!o->state) { o->state = 1; fn(p); } }
 void plat_mutex_lock(PlatMutex *m) { (void)m; }
 void plat_mutex_unlock(PlatMutex *m) { (void)m; }
@@ -25,6 +51,12 @@ int plat_mem_readable(uint64_t a, uint64_t n) { return a > 4096 && n <= 4096; }
 uint64_t kern_now_ns(void) { return ticks; }
 void input_glyph_snapshot(int *s, int *f, int *l, InputMap *m) { *s=source; *f=family; *l=pad_layout; *m=mapping; }
 void sha256(const void *p, size_t n, uint8_t h[32]) {
+    if (n == INLINE_RECORDS * INLINE_RECORD_BYTES) {   // Equal to the closed form: the constant; anything else: not it.
+        uint8_t want[INLINE_RECORDS * INLINE_RECORD_BYTES]; inline_atlas_records(want);
+        static const uint8_t good[32] = INLINE_RECORDS_SHA256;
+        if (!memcmp(p, want, n)) memcpy(h, good, 32); else memset(h, 0x5a, 32);
+        return;
+    }
     (void)p; assert(n == 128 || n == 84 || n == 28);
     if (n==128 && probe_kind>=0) { memcpy(h,probe_prefixes[probe_kind],32); return; }
     const uint8_t expected[32] = {0xed,0x91,0x64,0xc1,0x3b,0xf5,0x5b,0x99,0x9b,0xf7,0x8b,0xe9,0xd5,0x2d,0x3b,0x65,
@@ -63,6 +95,23 @@ static void nested(Cpu *c) {
 }
 static void put64(uint8_t *p, uint64_t v) { memcpy(p,&v,8); }
 static void put16(uint8_t *p, uint16_t v) { memcpy(p,&v,2); }
+static int original_calls;
+static void count_original(Cpu *c) { (void)c; original_calls++; }
+uint64_t inline_handle_result;
+static void bind_returning_handle(Cpu *c) {   // the BindTexture import inside the guest bind helper
+    uint64_t lr = c->x[30]; original_calls++;
+    c->x[30] = MOD_MAIN_BASE + 0x95c9cc;
+    inline_handle_result = appendage_glyph_handle(c, 0x10400338);
+    c->x[30] = lr;
+}
+// Stands for the guest bind helper: it reaches the BindTexture import, where the existing observer reads the handle.
+static void bind_reaching_import(Cpu *c) {
+    uint64_t lr = c->x[30];
+    original_calls++;
+    c->x[30] = MOD_MAIN_BASE + 0x95c9cc;
+    (void)appendage_glyph_handle(c, 0x10400338);
+    c->x[30] = lr;
+}
 int main(int argc, char **argv) {
     assert(appendage_glyph_art(APPENDAGE_GLYPH_TAG | (74ull<<32) | (192ull<<44))==74);
     assert(appendage_glyph_tagged(APPENDAGE_GLYPH_TAG | (74ull<<32) | (192ull<<44)));
@@ -109,6 +158,264 @@ int main(int argc, char **argv) {
         probe_kind=-1;draw(&c);assert(probe_handles==32);
         resource_probe=0;
         puts("Bounded resource probe: four filters, unrelated/type rejection, CPU/original passthrough, 32-event/time bounds and no retained node passed");
+        return 0;
+    }
+    if (!strcmp(argv[1],"icon")) {
+        inline_enabled=0;   // These fixtures are not the verified atlas; the probe is tested apart from replacement.
+        // Synthetic memory laid out as f_7000a21afc and the f_7000a322cc bind sites read it. The layout is a reading of
+        // the code; tests/inline_icon_oracle.py checks it against the lifted function itself.
+        static _Alignas(16) uint8_t L[0x600], M[0x40], owner[0x80], vec[16], names[3*0x24], Font[0x20], X[0x60], X2[0x60];
+        static _Alignas(16) uint8_t T[0x20+8*ICON_REC_BYTES], T2[0x20+8*ICON_REC_BYTES], nodeb[0x400], node2[0x400], geom[0x40];
+        static _Alignas(16) uint8_t tset[0x40], ent[2*0x78], ent2[0x78], ctx[0x40];
+        put64(L+8,(uintptr_t)owner); put64(owner+0x58,(uintptr_t)vec);
+        put64(vec,(uintptr_t)names); put64(vec+8,(uintptr_t)names+sizeof names);
+        const uint32_t codes[3]={3,5,0x10002}; const char *tags[3]={"a","x_l","pls"};
+        for (int i=0;i<3;i++) { memcpy(names+i*0x24,&codes[i],4); strcpy((char *)names+i*0x24+0x10,tags[i]); }
+        put64(L+0x10,(uintptr_t)Font); put64(L+0x18,(uintptr_t)X); put64(L+0x20,(uintptr_t)M);
+        put16(M+0x1a,500); { uint32_t n=3; memcpy(L+0x49c,&n,4); }
+        { float tint[4]={1.0f,0.5f,0.25f,1.0f}; memcpy(L+0x68,tint,16); }
+        for (int k=0;k<2;k++) {
+            uint8_t *src=k?X2:X, *tab=k?T2:T;
+            put64(src+0x38,(uintptr_t)tab); { uint32_t cnt=8; memcpy(src+0x48,&cnt,4); }
+            { float w=2.0f,h=3.0f; memcpy(src+0x4c,&w,4); memcpy(src+0x50,&h,4); }
+            { uint32_t off=0x20; memcpy(tab+0x18,&off,4); }
+            for (int i=0;i<8;i++) for (int w=0;w<ICON_REC_WORDS;w++) {
+                float v=k*1000.0f+i*10.0f+w+0.5f; memcpy(tab+0x20+i*ICON_REC_BYTES+w*4,&v,4);
+            }
+        }
+        put64(X+0x40,(uintptr_t)tset); put64(tset+0x30,(uintptr_t)ent);
+        for (unsigned i=0;i<sizeof ent/8;i++) put64(ent+i*8,0xe00000000ull+i);
+        put64(nodeb+0x3b8,(uintptr_t)X); put64(nodeb+0x308,(uintptr_t)geom); nodeb[0xf2]=3;
+        { uint32_t second=2, glyph=17; memcpy(geom+0x30,&second,4); memcpy(geom+0x34,&glyph,4); }
+        put64(node2+0x3b8,(uintptr_t)X2); put64(node2+0x308,(uintptr_t)geom);
+        IconLookup lk;
+        // Lookup: stride, masking, out-of-range fallback to record 0, and the degenerate sources.
+        assert(icon_lookup((uintptr_t)X,3,&lk)==ICON_OK&&lk.index==3&&lk.record==(uintptr_t)T+0x20+3*ICON_REC_BYTES&&lk.count==8);
+        assert(lk.w==2.0f&&lk.h==3.0f);
+        assert(icon_lookup((uintptr_t)X,7,&lk)==ICON_OK&&lk.index==7);
+        assert(icon_lookup((uintptr_t)X,8,&lk)==ICON_OK&&lk.index==0);          // Not below the count: record 0.
+        assert(icon_lookup((uintptr_t)X,0xffff,&lk)==ICON_OK&&lk.index==0);
+        assert(icon_lookup((uintptr_t)X,0x10005,&lk)==ICON_OK&&lk.index==5);    // Only the low 16 bits select.
+        { uint32_t zero=0; memcpy(X+0x48,&zero,4); assert(icon_lookup((uintptr_t)X,3,&lk)==ICON_OK&&lk.index==0);
+          uint32_t cnt=8; memcpy(X+0x48,&cnt,4); }
+        assert(icon_lookup(0,3,&lk)==ICON_NO_SOURCE);
+        assert(icon_lookup(16,3,&lk)==ICON_UNREADABLE);
+        { uint64_t saved=rd64((uintptr_t)X+0x38); put64(X+0x38,0);
+          assert(icon_lookup((uintptr_t)X,3,&lk)==ICON_NO_TABLE&&lk.count==8&&lk.w==2.0f&&!lk.record);
+          put64(X+0x38,16); assert(icon_lookup((uintptr_t)X,3,&lk)==ICON_UNREADABLE); put64(X+0x38,saved); }
+
+        // Layout probe.
+        Cpu c={0}; c.x[0]=(uintptr_t)L; c.x[1]=5; c.x[30]=MOD_MAIN_BASE+0xa2353c+0x14;
+        icon_probe=1; icon_deadline=~0ull; icon_layout_events=icon_bind_events=icon_source_count=0;
+        icon_layout_calls=icon_bind_calls=0; ticks=0;
+        Cpu before=c;
+        appendage_glyph_icon_layout(&c);
+        assert(!memcmp(&before,&c,sizeof c));
+        assert(icon_layout_events==1&&icon_layout_calls==1&&icon_source_count==1&&icon_sources[0]==(uintptr_t)X);
+        assert(strstr(last_log,"layout code 5 key 5 tag x_l")&&strstr(last_log,"status ok count 8 size 2.000x3.000 index 5"));
+        { char want[64]; float v=5*10.0f+0.5f; uint32_t b; memcpy(&b,&v,4); snprintf(want,sizeof want,"words %08x ",b);
+          assert(strstr(last_log,want)); }   // Word 0 of record 5.
+        assert(strstr(last_log,"tint 1.00,0.50,0.25,1.00")&&strstr(last_log,"batch 3/500"));
+        appendage_glyph_icon_layout(&c); assert(icon_layout_events==1&&icon_layout_calls==2);   // Same pair is not repeated.
+        c.x[1]=0x10002; appendage_glyph_icon_layout(&c);
+        assert(icon_layout_events==2&&strstr(last_log,"layout code 65538 key 2 tag pls")&&strstr(last_log,"index 2"));
+        c.x[1]=9; appendage_glyph_icon_layout(&c);   // A code with no table entry is still recorded, as record 0.
+        assert(icon_layout_events==3&&strstr(last_log,"tag ?")&&strstr(last_log,"index 0"));
+        put64(L+0x18,(uintptr_t)X2); c.x[1]=5; appendage_glyph_icon_layout(&c);       // Another source, same code.
+        assert(icon_layout_events==4&&icon_source_count==2&&strstr(last_log,"floats 1050.5"));
+        put64(L+0x18,0); appendage_glyph_icon_layout(&c);                              // No source: contradicting data kept.
+        assert(icon_layout_events==5&&strstr(last_log,"status no-source")&&icon_source_count==2);
+        put64(L+0x18,(uintptr_t)X);
+        c.x[0]=16; appendage_glyph_icon_layout(&c);
+        assert(strstr(last_log,"unreadable")&&icon_layout_events==5);
+        c.x[0]=(uintptr_t)L;
+        for (uint32_t k=100;k<100+2*ICON_LAYOUT_EVENTS;k++) { c.x[1]=k; appendage_glyph_icon_layout(&c); }
+        assert(icon_layout_events==ICON_LAYOUT_EVENTS&&icon_layout_calls>ICON_LAYOUT_EVENTS);   // Bounded, still counted.
+        ticks=icon_deadline=1; { unsigned calls=icon_layout_calls; appendage_glyph_icon_layout(&c); assert(icon_layout_calls==calls); }
+        icon_deadline=~0ull; ticks=0; icon_probe=0;
+        { unsigned calls=icon_layout_calls; appendage_glyph_icon_layout(&c); assert(icon_layout_calls==calls); }
+        icon_probe=1;
+
+        // Bind wrapper. A source seen at layout, entry 0 as x1, the second-pass draw count in the geometry.
+        icon_layout_events=icon_source_count=0; icon_sources[0]=(uintptr_t)X; icon_source_count=1;
+        Cpu b={0}; b.x[0]=(uintptr_t)ctx; b.x[1]=(uintptr_t)ent; b.x[2]=3; b.x[3]=0; b.x[19]=(uintptr_t)nodeb;
+        b.x[30]=MOD_MAIN_BASE+0xa325fc;
+        ProbeScope outer={&b,55,1}; probe_scope=outer;
+        original_calls=0; probe_handles=0; last_observed_event=0; before=b;
+        appendage_glyph_icon_bind(&b,bind_reaching_import);
+        assert(original_calls==1&&!memcmp(&before,&b,sizeof b));
+        assert(probe_scope.cpu==outer.cpu&&probe_scope.event==outer.event&&probe_scope.deadline==outer.deadline);   // Restored.
+        assert(icon_bind_events==1&&last_observed_event==ICON_BIND_EVENT_BASE+1&&probe_handles==1);
+        // last_log holds the latest line, which is the bind line (the observer stub does not log).
+        assert(strstr(last_log,"icon probe bind 1: site ")&&strstr(last_log," seen at layout; source ok count 8 size 2.000x3.000"));
+        assert(strstr(last_log,"== entry0; slot 3 flag 0 draw counts glyph 17 second 2")&&strstr(last_log,"resource probe 201"));
+        assert(strstr(last_log,"e00000000 e00000001 e00000002"));
+        // Negative controls: the register check must be able to fail.
+        b.x[1]=(uintptr_t)ent+0x78; appendage_glyph_icon_bind(&b,bind_reaching_import);
+        assert(icon_bind_events==2&&strstr(last_log,"!= entry0"));
+        b.x[1]=(uintptr_t)ent; b.x[19]=(uintptr_t)node2; appendage_glyph_icon_bind(&b,bind_reaching_import);   // Unseen source.
+        assert(icon_bind_events==3&&strstr(last_log,"NOT seen at layout")&&strstr(last_log,"!= entry0"));
+        // Repeats are not logged again; the original still runs and the observer scope stays unarmed.
+        b.x[19]=(uintptr_t)nodeb; original_calls=0; probe_handles=0;
+        appendage_glyph_icon_bind(&b,bind_reaching_import);
+        assert(original_calls==1&&icon_bind_events==3&&!probe_handles&&icon_bind_calls==4);
+        // A bind that never reaches the import is reported, not silently dropped.
+        uint64_t site=MOD_MAIN_BASE+0xa32690;   // Events are keyed on site, source and entry; slot alone is not part of the key.
+        b.x[2]=4; b.x[30]=++site; appendage_glyph_icon_bind(&b,count_original);
+        assert(icon_bind_events==4&&strstr(last_log,"no BindTexture import reached"));
+        // Unrelated or invalid nodes: the original runs once, CPU state is untouched, and no pointer is chased.
+        b.x[2]=5; b.x[19]=16; b.x[30]=++site; before=b; original_calls=0;
+        appendage_glyph_icon_bind(&b,bind_reaching_import);
+        assert(original_calls==1&&!memcmp(&before,&b,sizeof b)&&strstr(last_log,"bind 5:")&&strstr(last_log,"source no-source"));
+        put64(nodeb+0x3b8,0); b.x[19]=(uintptr_t)nodeb; b.x[2]=6; b.x[30]=++site; original_calls=0;
+        appendage_glyph_icon_bind(&b,bind_reaching_import);
+        assert(original_calls==1&&strstr(last_log,"source no-source")&&strstr(last_log,"x1 ")&&strstr(last_log,"!= entry0"));
+        put64(nodeb+0x3b8,(uintptr_t)X);
+        put64(nodeb+0x308,0); b.x[2]=7; b.x[30]=++site; appendage_glyph_icon_bind(&b,bind_reaching_import);
+        assert(strstr(last_log,"draw counts glyph 0 second 0"));
+        put64(nodeb+0x308,(uintptr_t)geom);
+        // Source with a texture set that is missing or unreadable.
+        put64(X2+0x40,0); b.x[19]=(uintptr_t)node2; b.x[2]=8; b.x[30]=++site; appendage_glyph_icon_bind(&b,bind_reaching_import);
+        assert(strstr(last_log,"set 0 entry0 0"));
+        put64(X2+0x40,16); b.x[2]=9; b.x[30]=++site; appendage_glyph_icon_bind(&b,bind_reaching_import); assert(strstr(last_log,"entry0 0"));
+        for (unsigned k=0;k<2*ICON_BIND_EVENTS;k++) { b.x[2]=100+k; b.x[19]=(uintptr_t)nodeb; b.x[1]=k+1; appendage_glyph_icon_bind(&b,count_original); }
+        assert(icon_bind_events==ICON_BIND_EVENTS&&icon_bind_calls>ICON_BIND_EVENTS);
+        // Disabled or expired: pass-through only, nothing counted or logged.
+        last_log[0]=0; { unsigned calls=icon_bind_calls; original_calls=0;
+          icon_probe=0; appendage_glyph_icon_bind(&b,count_original);
+          icon_probe=1; ticks=icon_deadline=1; appendage_glyph_icon_bind(&b,count_original);
+          assert(original_calls==2&&icon_bind_calls==calls&&!last_log[0]); }
+        icon_probe=0; ticks=0; icon_deadline=0;
+        puts("Icon probe: lookup stride/masking/fallback/degenerate sources, layout and bind events with dedup, bounds and "
+             "counters, register self-check with negative controls, observer correlation, restore and pass-through passed");
+        return 0;
+    }
+    if (!strcmp(argv[1],"inline")) {
+        // ---- policy: the eight inline actions, translated through the layout and current bindings
+        int8_t art[GLYPH_INLINE_SET], other[GLYPH_INLINE_SET];
+        input_map_reset(); mapping=input_map; source=GLYPH_SOURCE_PAD; family=GLYPH_PAD_PS; pad_layout=PAD_LAYOUT_XBOX;
+        glyph_decide_inline_set(GLYPH_PLAYSTATION,source,family,pad_layout,&mapping,GLYPH_STANDARD,art);
+        for (int i=0;i<GLYPH_INLINE_SET;i++) assert(art[i]>=0);
+        for (int i=0;i<GLYPH_INLINE_SET;i++) for (int j=i+1;j<GLYPH_INLINE_SET;j++) assert(art[i]!=art[j]);
+        glyph_decide_inline_set(GLYPH_PLAYSTATION,source,family,PAD_LAYOUT_NINTENDO,&mapping,GLYPH_STANDARD,other);
+        // Button layout moves which face button is Switch A/B/X/Y; the shoulders and triggers do not move.
+        assert(other[0]!=art[0]&&other[1]!=art[1]&&other[2]!=art[2]&&other[3]!=art[3]);
+        for (int i=4;i<8;i++) assert(other[i]==art[i]);
+        assert(other[0]==art[1]&&other[1]==art[0]);   // A and B swap places with the layout
+        glyph_decide_inline_set(GLYPH_PLAYSTATION,source,family,pad_layout,&mapping,GLYPH_COLORED,other);
+        for (int i=0;i<4;i++) assert(other[i]>=0&&other[i]!=art[i]&&glyph_art_variant(art[i],GLYPH_COLORED)==other[i]);   // Colored faces
+        for (int i=4;i<8;i++) assert(other[i]==art[i]);                                                                     // no colored shoulders
+        glyph_decide_inline_set(GLYPH_ORIGINAL,source,family,pad_layout,&mapping,GLYPH_STANDARD,other);
+        for (int i=0;i<GLYPH_INLINE_SET;i++) assert(other[i]==-1);
+        glyph_decide_inline_set(GLYPH_AUTO,source,GLYPH_PAD_SWITCH,pad_layout,&mapping,GLYPH_STANDARD,other);   // native controller
+        for (int i=0;i<GLYPH_INLINE_SET;i++) assert(other[i]==-1);
+        glyph_decide_inline_set(GLYPH_AUTO,GLYPH_SOURCE_KEYBOARD,family,pad_layout,&mapping,GLYPH_STANDARD,other);
+        { int kb=0; for (int i=0;i<GLYPH_INLINE_SET;i++) kb+=other[i]>=0; assert(kb>0); }                      // letters have tiles
+        // One shared physical input keeps only the affected actions native; the others stay replaced.
+        { InputMap shared=mapping; int l=-1,r=-1;
+          for (int i=0;i<shared.npads[pad_layout];i++) { if (shared.pads[pad_layout][i].action==B_L) l=i; if (shared.pads[pad_layout][i].action==B_R) r=i; }
+          assert(l>=0&&r>=0); shared.pads[pad_layout][r].pad=shared.pads[pad_layout][l].pad;
+          glyph_decide_inline_set(GLYPH_PLAYSTATION,source,family,pad_layout,&shared,GLYPH_STANDARD,other);
+          assert(other[4]==-1&&other[5]==-1&&other[0]==art[0]&&other[1]==art[1]&&other[6]==art[6]&&other[7]==art[7]);
+          InputMap unbound=mapping; for (int i=0;i<unbound.npads[pad_layout];i++) if (unbound.pads[pad_layout][i].action==B_ZL) unbound.pads[pad_layout][i].pad=PAD_NONE;
+          glyph_decide_inline_set(GLYPH_PLAYSTATION,source,family,pad_layout,&unbound,GLYPH_STANDARD,other);
+          assert(other[6]==-1&&other[7]==art[7]&&other[0]==art[0]); }
+
+        // ---- tile fitting: art stays inside the native glyph box, centred, never outside it
+        { static uint32_t cell[INLINE_CELL_W*INLINE_CELL_H];
+          for (unsigned k=0;k<INLINE_CELLS;k++) for (unsigned a=0;a<glyph_art_count();a++) {
+              const InlineCell *ic=&inline_cells_geom[k];
+              assert(glyph_art_inline_cell(a,ic->x,ic->y,ic->w,ic->h,cell));
+              int x0=INLINE_CELL_W,y0=INLINE_CELL_H,x1=-1,y1=-1; unsigned opaque=0;
+              for (int y=0;y<INLINE_CELL_H;y++) for (int x=0;x<INLINE_CELL_W;x++) if (cell[y*INLINE_CELL_W+x]>>24) {
+                  opaque++; if (x<x0) x0=x; if (x>x1) x1=x; if (y<y0) y0=y; if (y>y1) y1=y; }
+              assert(opaque>20&&x0>=ic->x&&y0>=ic->y&&x1<ic->x+ic->w&&y1<ic->y+ic->h);       // inside the native box
+              assert(x1-x0+1>=ic->w*6/10||y1-y0+1>=ic->h*6/10);                             // and not tiny
+              assert(2*x0+(x1-x0)>=2*ic->x+ic->w-3&&2*x0+(x1-x0)<=2*ic->x+ic->w+3);          // centred horizontally
+          } }
+        assert(!glyph_art_inline_cell(glyph_art_count(),8,10,30,30,(uint32_t[INLINE_CELL_W*INLINE_CELL_H]){0}));
+        assert(!glyph_art_inline_cell(0,40,10,30,30,(uint32_t[INLINE_CELL_W*INLINE_CELL_H]){0}));   // box leaves the cell
+
+        // ---- source identity, bind arming and the handle
+        static _Alignas(16) uint8_t X[0x60], T[0x20+INLINE_RECORDS*INLINE_RECORD_BYTES], tset[0x40], entries[2*0x78], nodeb[0x400];
+        inline_atlas_records(T+0x20); { uint32_t off=0x20; memcpy(T+0x18,&off,4); }
+        put64(X+0x38,(uintptr_t)T); { uint32_t cnt=INLINE_RECORDS; memcpy(X+0x48,&cnt,4); float a=INLINE_SOURCE_SCALE_A,b=INLINE_SOURCE_SCALE_B; memcpy(X+0x4c,&a,4); memcpy(X+0x50,&b,4); }
+        put64(X+0x40,(uintptr_t)tset); put64(tset+0x30,(uintptr_t)entries);
+        const uint64_t storage=0x48e5e5000ull;
+        put64(entries,INLINE_ENTRY_Q0); put64(entries+0x20,storage);
+        put64(nodeb+0x3b8,(uintptr_t)X);
+        IconLookup lk;
+        assert(inline_source_ok((uintptr_t)X,&lk)&&lk.count==INLINE_RECORDS);
+        { uint8_t w[4]; memcpy(w,T+0x20+7*INLINE_RECORD_BYTES+16,4); T[0x20+7*INLINE_RECORD_BYTES+16]^=1; assert(!inline_source_ok((uintptr_t)X,&lk)); memcpy(T+0x20+7*INLINE_RECORD_BYTES+16,w,4); }
+        { float scale=49.0f; float keep; memcpy(&keep,X+0x4c,4); memcpy(X+0x4c,&scale,4); assert(!inline_source_ok((uintptr_t)X,&lk)); memcpy(X+0x4c,&keep,4); }
+        { uint32_t cnt=47; memcpy(X+0x48,&cnt,4); assert(!inline_source_ok((uintptr_t)X,&lk)); cnt=INLINE_RECORDS; memcpy(X+0x48,&cnt,4); }
+        assert(!inline_source_ok(0,&lk)&&inline_source_ok((uintptr_t)X,&lk));
+
+        extern uint64_t inline_handle_result;
+        Cpu b={0}; b.x[19]=(uintptr_t)nodeb; b.x[1]=(uintptr_t)entries; b.x[2]=3; b.x[30]=MOD_MAIN_BASE+0xa325fc;
+        icon_probe=0; ticks=0; inline_sig_count=0; inline_full_logged=inline_source_logged=inline_entry_logged=0; memset(inline_sigs,0,sizeof inline_sigs);
+        preference="playstation"; appearance_preference="standard"; family=GLYPH_PAD_PS; source=GLYPH_SOURCE_PAD; pad_layout=PAD_LAYOUT_XBOX;
+        inline_enabled=1; inline_capture_ok=1;
+        Cpu before=b; original_calls=0; probe_scope=(ProbeScope){0};
+        appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(original_calls==1&&!memcmp(&before,&b,sizeof b));
+        assert(appendage_inline_tagged(inline_handle_result)&&appendage_inline_id(inline_handle_result)==1);
+        assert((inline_handle_result&0xffffffffu)==0x10400338u&&!appendage_glyph_tagged(inline_handle_result)&&appendage_handle_tagged(inline_handle_result));
+        assert(inline_captured_handle==inline_handle_result&&inline_captured_storage==storage);
+        assert(!inline_scope.cpu&&!inline_scope.id);                                  // The scope does not leak out of the bind.
+        assert(inline_sig_count==1&&strstr(last_log,"inline glyph: signature 1:")&&strstr(last_log,"A=playstation_button_cross.png"));
+        { int8_t got[8]; assert(appendage_inline_signature(1,got)&&!memcmp(got,art,8)&&!appendage_inline_signature(0,got)&&!appendage_inline_signature(2,got)); }
+        // Repeat: same signature, no new log, same handle. A copied command keeps its own handle value.
+        last_log[0]=0; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(appendage_inline_id(inline_handle_result)==1&&inline_sig_count==1&&!last_log[0]);
+        // Source validation by registration identity: the first capture fixes serial/storage, later mismatches fail.
+        { uint64_t h=inline_handle_result;
+          assert(appendage_inline_source(h,9,storage)&&appendage_inline_source(h,9,storage));
+          assert(!appendage_inline_source(h,10,storage)&&!appendage_inline_source(h,9,storage+0x1000)&&!appendage_inline_source(h,0,storage));
+          assert(!appendage_inline_source(0x10400338,9,storage)&&!appendage_inline_source(INLINE_GLYPH_TAG|(2ull<<32)|0x10400338,9,storage)); }
+        // A style change selects another signature without touching the previous one.
+        preference="xbox"; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(appendage_inline_id(inline_handle_result)==2&&inline_sig_count==2&&strstr(last_log,"A=xbox_button_a.png"));
+        pad_layout=PAD_LAYOUT_NINTENDO; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(appendage_inline_id(inline_handle_result)==3);                          // A moved with the physical layout
+        pad_layout=PAD_LAYOUT_XBOX; preference="playstation"; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(appendage_inline_id(inline_handle_result)==1);
+        // Original, unsupported and failed captures keep the native handle.
+        preference="original"; inline_handle_result=0; original_calls=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(original_calls==1&&inline_handle_result==0x10400338u);
+        preference="auto"; family=GLYPH_PAD_SWITCH; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(inline_handle_result==0x10400338u);                                   // native Nintendo artwork is never relabelled
+        preference="playstation"; family=GLYPH_PAD_PS; inline_capture_ok=0; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+        assert(inline_handle_result==0x10400338u); inline_capture_ok=1;
+        inline_enabled=0; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle); assert(inline_handle_result==0x10400338u); inline_enabled=1;
+        // Wrong source, wrong entry, wrong word, unreadable node, a text node with no icon source: native handle, original runs.
+        { uint64_t keep=rd64((uintptr_t)nodeb+0x3b8);
+          T[0x20+3]^=0x40; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
+          assert(inline_handle_result==0x10400338u&&strstr(last_log,"did not match the verified atlas")); T[0x20+3]^=0x40;
+          put64(nodeb+0x3b8,0); inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle); assert(inline_handle_result==0x10400338u);
+          put64(nodeb+0x3b8,keep);
+          Cpu wrong=b; wrong.x[1]=(uintptr_t)entries+0x78; inline_handle_result=0; appendage_glyph_icon_bind(&wrong,bind_returning_handle);
+          assert(inline_handle_result==0x10400338u&&strstr(last_log,"not entry 0"));
+          uint64_t q0=INLINE_ENTRY_Q0^1; put64(entries,q0); inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle); assert(inline_handle_result==0x10400338u);
+          put64(entries,INLINE_ENTRY_Q0); put64(entries+0x20,0); inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle); assert(inline_handle_result==0x10400338u);
+          put64(entries+0x20,storage);
+          Cpu bad=b; bad.x[19]=16; original_calls=0; inline_handle_result=0; appendage_glyph_icon_bind(&bad,bind_returning_handle);
+          assert(original_calls==1&&inline_handle_result==0x10400338u); }
+        // A BindTexture import that is not the one the scope names: wrong return address, tagged handle, other CPU.
+        { Cpu other=b; other.x[30]=MOD_MAIN_BASE+0x95c9cc; assert(appendage_glyph_handle(&other,0x10400338)==0x10400338); }
+        // Bounded table: combinations beyond the limit keep the native atlas, and say so once. Existing ids stay valid.
+        { unsigned have=inline_sig_count; inline_full_logged=0; int8_t set[INLINE_ACTIONS]; unsigned granted=0, refused=0;
+          for (unsigned k=0;k<INLINE_SIGNATURES+10;k++) {
+              memset(set,-1,sizeof set); set[k%8]=(int8_t)(k/8); set[(k+3)%8]=(int8_t)(k%7);   // distinct by construction
+              last_log[0]=0; unsigned id=inline_signature_id(set);
+              if (id) granted++; else { refused++; assert(strstr(last_log,"signatures in use")||!last_log[0]); }
+          }
+          assert(inline_sig_count==INLINE_SIGNATURES&&refused>0&&granted+have>=INLINE_SIGNATURES);
+          int8_t again[INLINE_ACTIONS]; assert(appendage_inline_signature(1,again)&&!memcmp(again,art,8));   // earlier ids are intact
+          unsigned count=inline_sig_count; memset(set,-1,sizeof set); set[0]=(int8_t)(glyph_art_count()-1); set[7]=0;
+          assert(!inline_signature_id(set)&&inline_sig_count==count);                                        // still refused, no growth
+          int8_t known[INLINE_ACTIONS]; assert(appendage_inline_signature(3,known)&&inline_signature_id(known)==3); }   // known set still resolves
+        puts("Inline atlas: policy by layout/binding/appearance, tile fitting, source identity, arming, handle scope, signatures and fallbacks passed");
         return 0;
     }
     if (!strcmp(argv[1],"guides")) {

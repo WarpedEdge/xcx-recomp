@@ -10,6 +10,7 @@
 #include "layout.h"
 #include "platform/platform.h"
 #include "sha256.h"
+#include "inline_glyph.h"
 
 enum { GENERATIONS = 192, APPENDAGE_SLOTS = 3, NODE_SLOTS = 7 };
 static const unsigned selectors[NODE_SLOTS] = {14,6,7,5,7,14,15};
@@ -43,12 +44,38 @@ static const char *const probe_names[4] = {"font_icon", "02110_judgering_btn", "
 static int resource_probe;
 static uint64_t probe_deadline;
 static unsigned probe_counts[4], probe_events;
-typedef struct { const Cpu *cpu; unsigned event; } ProbeScope;
+typedef struct { const Cpu *cpu; unsigned event; uint64_t deadline; } ProbeScope;
 static _Thread_local ProbeScope probe_scope;
+// Opt-in research (XCX_GLYPH_ICON_PROBE=1), read-only: the ML:icon layout method f_7000a21afc and the draw's two bind sites
+// for the icon source (0xa325f8, 0xa32688). Rendering and guest state are unchanged. Addresses logged here are numbers for
+// correlating one event with another; none is dereferenced after the call that produced it, except the live node/source
+// the draw itself is using during the bind.
+typedef struct { uint64_t source; uint32_t code; } IconSeen;
+typedef struct { uint64_t site, source, entry; } IconBindSeen;
+enum { ICON_LAYOUT_EVENTS = 64, ICON_BIND_EVENTS = 32, ICON_SOURCES = 16, ICON_BIND_EVENT_BASE = 200 };
+static int icon_probe;
+static uint64_t icon_deadline;
+static unsigned icon_layout_events, icon_bind_events, icon_source_count;
+static unsigned icon_layout_calls, icon_bind_calls;   // every call, also those past the event caps
+static IconSeen icon_seen[ICON_LAYOUT_EVENTS];
+static IconBindSeen icon_bind_seen[ICON_BIND_EVENTS];
+static uint64_t icon_sources[ICON_SOURCES];
+
+// Inline text-icon atlas replacement. A signature is the art chosen for each virtual button (A, B, X, Y, L, R, ZL, ZR; -1 keeps
+// that button's native cells). Signatures are never recycled: copied draw commands carry the handle's signature id until
+// they execute. The table is bounded; once full, new combinations keep the native atlas.
+typedef struct { int8_t art[INLINE_ACTIONS]; uint64_t serial, storage; } InlineSignature;
+typedef struct { const Cpu *cpu; unsigned id; uint64_t storage; } InlineScope;
+static InlineSignature inline_sigs[INLINE_SIGNATURES];
+static unsigned inline_sig_count, inline_full_logged, inline_source_logged, inline_entry_logged;
+static int inline_enabled = 1;
+static _Thread_local InlineScope inline_scope;
 
 static uint64_t rd64(uint64_t p) { uint64_t v; memcpy(&v, (void *)(uintptr_t)p, 8); return v; }
 static uint32_t rd32(uint64_t p) { uint32_t v; memcpy(&v, (void *)(uintptr_t)p, 4); return v; }
 static uint16_t rd16(uint64_t p) { uint16_t v; memcpy(&v, (void *)(uintptr_t)p, 2); return v; }
+static float rdf(uint64_t p) { float v; memcpy(&v, (void *)(uintptr_t)p, 4); return v; }
+#include "inline_icon_probe.inc"
 // The inspected resource header bounds the record table before the 0x1000 texture region.
 static int records_match(uint64_t resource, unsigned extra) {
     if (!resource || !plat_mem_readable(resource, 0x1000)) return 0;
@@ -85,6 +112,16 @@ static void init(void *unused) {
         probe_deadline = kern_now_ns() + 180000000000ull;
         rt_log("glyph resource probe: CAPTURE READY; existing type-1 route only, four resource prefixes, 8 samples each, 180 seconds; unchanged rendering");
     }
+    v = getenv("XCX_GLYPH_ICON_PROBE");
+    icon_probe = enabled && v && !strcmp(v,"1");
+    if (icon_probe) {
+        // Generous because the clock starts at boot, long before a menu page can be opened; the event caps bound the log.
+        icon_deadline = kern_now_ns() + 480000000000ull;
+        rt_log("glyph icon probe: CAPTURE READY; ML:icon layout f_7000a21afc (64 code/source pairs) and icon-source binds "
+               "0xa325f8/0xa32688 (32 site/source/entry triples), 480 seconds; unchanged rendering");
+    }
+    v = getenv("XCX_INLINE_GLYPH");
+    inline_enabled = enabled && (!v || strcmp(v, "0"));
     if (enabled) rt_log("appendage glyph: experimental Appendage styles; original rendering is the fallback");
 }
 
@@ -102,7 +139,7 @@ static ProbeScope probe_bind(const Cpu *c, uint64_t node) {
     for (unsigned i=0;i<4;i++) if (!memcmp(hash,probe_prefixes[i],32)) {
         plat_mutex_lock(&glyph_lock);
         if (probe_counts[i]<8 && kern_now_ns()<probe_deadline) {
-            probe_counts[i]++; result=(ProbeScope){c,++probe_events};
+            probe_counts[i]++; result=(ProbeScope){c,++probe_events,probe_deadline};
             // Addresses correlate this call only; no pointer is retained after the original bind returns.
             rt_log("glyph resource probe %u: resource %s prefix128 node %llx type 1 selector %u count %u texture-object %llx",
                    result.event,probe_names[i],(unsigned long long)node,rd16(node+0x34c),rd16(node+0x34e),
@@ -113,6 +150,198 @@ static ProbeScope probe_bind(const Cpu *c, uint64_t node) {
     }
     return result;
 }
+// The ML:icon branch of the tag dispatcher (f_7000a23150) matches the tag value against 0x24-byte entries
+// {u32 code, ..., char name[0x14] at +0x10} in the vector at layouter->+8->+0x58 and passes the matching code on.
+static void icon_tag_name(uint64_t layouter, uint32_t code, char name[0x15]) {
+    strcpy(name, "?");
+    uint64_t owner = rd64(layouter + 8);
+    if (!owner || !plat_mem_readable(owner, 0x60)) return;
+    uint64_t vector = rd64(owner + 0x58);
+    if (!vector || !plat_mem_readable(vector, 16)) return;
+    uint64_t begin = rd64(vector), end = rd64(vector + 8);
+    if (end < begin || (end - begin) / 0x24 > 1024 || !plat_mem_readable(begin, end - begin)) return;
+    for (uint64_t e = begin; e + 0x24 <= end; e += 0x24) {
+        if (rd32(e) != code) continue;
+        memcpy(name, (void *)(uintptr_t)(e + 0x10), 0x14);
+        name[0x14] = 0;
+        for (char *q = name; *q; q++) if (*q < 0x20 || *q > 0x7e) *q = '.';
+        return;
+    }
+}
+
+// Logs at 1, 10, 100, ... so the totals stay visible after the event caps are reached.
+static void icon_count_note(const char *what, unsigned n) {
+    unsigned p = 1;
+    while (p < n && p <= 100000000u) p *= 10;
+    if (p == n) rt_log("glyph icon probe: %u %s calls so far", n, what);
+}
+
+void appendage_glyph_icon_layout(const Cpu *c) {
+    plat_once(&once, init, NULL);
+    if (!icon_probe || kern_now_ns() >= icon_deadline) return;
+    uint64_t layouter = c->x[0], caller = c->x[30];
+    uint32_t code = (uint32_t)c->x[1];
+    plat_mutex_lock(&glyph_lock);
+    unsigned calls = ++icon_layout_calls;
+    plat_mutex_unlock(&glyph_lock);
+    icon_count_note("layout", calls);
+    if (!plat_mem_readable(layouter, 0x4f8)) {
+        rt_log("glyph icon probe: layout call %u code %u: layouter %llx unreadable", calls, code, (unsigned long long)layouter);
+        return;
+    }
+    uint64_t source = rd64(layouter + 0x18), metrics = rd64(layouter + 0x20), font = rd64(layouter + 0x10);
+    IconLookup lk;
+    icon_lookup(source, code, &lk);
+    uint32_t words[ICON_REC_WORDS] = {0};
+    if (lk.status == ICON_OK) memcpy(words, (void *)(uintptr_t)lk.record, sizeof words);
+    float f[ICON_REC_WORDS];
+    memcpy(f, words, sizeof f);
+    unsigned limit = metrics && plat_mem_readable(metrics, 0x20) ? rd16(metrics + 0x1a) : 0;
+    plat_mutex_lock(&glyph_lock);
+    int seen = icon_layout_events >= ICON_LAYOUT_EVENTS;
+    for (unsigned i = 0; i < icon_layout_events && !seen; i++) seen = icon_seen[i].source == source && icon_seen[i].code == code;
+    int known = 0;
+    for (unsigned i = 0; i < icon_source_count; i++) known |= icon_sources[i] == source;
+    if (!known && source && icon_source_count < ICON_SOURCES) icon_sources[icon_source_count++] = source;
+    unsigned event = 0;
+    if (!seen) { icon_seen[icon_layout_events] = (IconSeen){source, code}; event = ++icon_layout_events; }
+    plat_mutex_unlock(&glyph_lock);
+    if (!event) return;
+    char name[0x15];
+    icon_tag_name(layouter, code, name);
+    rt_log("glyph icon probe %u: layout code %u key %u tag %s source %llx status %s count %u size %.3fx%.3f index %u "
+           "table %llx record %llx words %08x %08x %08x %08x %08x %08x %08x floats %g %g %g %g %g %g "
+           "tint %.2f,%.2f,%.2f,%.2f batch %u/%u font %llx metrics %llx caller %llx",
+           event, code, code & 0xffff, name, (unsigned long long)source, icon_status_name(lk.status), lk.count, lk.w, lk.h,
+           lk.index, (unsigned long long)lk.table, (unsigned long long)lk.record,
+           words[0], words[1], words[2], words[3], words[4], words[5], words[6], f[0], f[1], f[2], f[3], f[4], f[5],
+           rdf(layouter + 0x68), rdf(layouter + 0x6c), rdf(layouter + 0x70), rdf(layouter + 0x74),
+           rd32(layouter + 0x49c), limit, (unsigned long long)font, (unsigned long long)metrics, (unsigned long long)caller);
+}
+
+// Source identity: 48 records of 28 bytes whose SHA-256 is INLINE_RECORDS_SHA256, with the scale floats of the pinned
+// build. The hash covers the UV table only; it identifies the atlas layout without any pixel data.
+static int inline_source_ok(uint64_t src, IconLookup *lk) {
+    icon_lookup(src, 0, lk);
+    if (lk->status != ICON_OK || lk->count != INLINE_RECORDS || lk->w != INLINE_SOURCE_SCALE_A || lk->h != INLINE_SOURCE_SCALE_B ||
+        !plat_mem_readable(lk->record, INLINE_RECORDS * INLINE_RECORD_BYTES)) return 0;
+    static const uint8_t expected[32] = INLINE_RECORDS_SHA256;
+    uint8_t hash[32];
+    sha256((void *)(uintptr_t)lk->record, INLINE_RECORDS * INLINE_RECORD_BYTES, hash);
+    return !memcmp(hash, expected, sizeof hash);
+}
+
+static unsigned inline_signature_id(const int8_t art[INLINE_ACTIONS]) {
+    unsigned id = 0, created = 0;
+    plat_mutex_lock(&glyph_lock);
+    for (unsigned i = 0; i < inline_sig_count && !id; i++)
+        if (!memcmp(inline_sigs[i].art, art, INLINE_ACTIONS)) id = i + 1;
+    if (!id && inline_sig_count < INLINE_SIGNATURES) {
+        memcpy(inline_sigs[inline_sig_count].art, art, INLINE_ACTIONS);
+        id = ++inline_sig_count; created = 1;
+    }
+    int full = !id && !inline_full_logged++;
+    plat_mutex_unlock(&glyph_lock);
+    if (created) {
+        char list[INLINE_ACTIONS * 32 + 1] = ""; static const char *const names[INLINE_ACTIONS] = {"A","B","X","Y","L","R","ZL","ZR"};
+        for (int i = 0; i < INLINE_ACTIONS; i++) {
+            size_t n = strlen(list);
+            snprintf(list + n, sizeof list - n, "%s=%s ", names[i], art[i] >= 0 ? glyph_art_name((unsigned)art[i]) : "native");
+        }
+        rt_log("inline glyph: signature %u: %s", id, list);
+    }
+    if (full) rt_log("inline glyph: %u signatures in use; further style or binding combinations keep the native icons", INLINE_SIGNATURES);
+    return id;
+}
+
+// At the icon-source binds (the same two sites as the probe, whose register meanings are in the notes there): when the
+// current style replaces at least one button and the node's source and entry 0 are the verified inline atlas, the next
+// BindTexture import inside this call may name a replacement. Nothing is written to the guest or the native atlas.
+static void inline_arm(Cpu *c) {
+    int8_t art[INLINE_ACTIONS];
+    glyph_current_inline_set(art);
+    int any = 0;
+    for (int i = 0; i < INLINE_ACTIONS; i++) any |= art[i] >= 0;
+    if (!any) return;
+    uint64_t node = c->x[19], entry = c->x[1];
+    if (!plat_mem_readable(node, 0x3c0)) return;
+    uint64_t src = rd64(node + 0x3b8);
+    IconLookup lk;
+    if (!src || !inline_source_ok(src, &lk)) {
+        if (src && !inline_source_logged++) rt_log("inline glyph: an icon source did not match the verified atlas; native icons kept");
+        return;
+    }
+    uint64_t set = rd64(src + 0x40), first = set && plat_mem_readable(set, 0x38) ? rd64(set + 0x30) : 0;
+    if (!first || entry != first || !plat_mem_readable(entry, 0x78) || rd64(entry) != INLINE_ENTRY_Q0 || !rd64(entry + 0x20)) {
+        if (!inline_entry_logged++) rt_log("inline glyph: the bound texture entry is not entry 0 of the verified source; native icons kept");
+        return;
+    }
+    unsigned id = inline_signature_id(art);
+    if (id) inline_scope = (InlineScope){c, id, rd64(entry + 0x20)};
+}
+
+// The two f_7000a322cc binds of the icon source (node+0x3b8). Argument meanings, checked against the pinned main by
+// verify_sites.py: x0 render context, x1 entry 0 of the source's texture set (*(*(source+0x40)+0x30), 0x78-byte entries),
+// x2 slot byte node+0xf2, x3 zero; x19 still holds the text node. Comparing x1 with an entry recomputed from c->x[19]
+// checks that last assumption at run time: it can only match when c->x[19] really is the node the draw uses.
+void appendage_glyph_icon_bind(Cpu *c, GuestFn original) {
+    ProbeScope saved = probe_scope;
+    InlineScope saved_inline = inline_scope;
+    probe_scope = (ProbeScope){0};
+    inline_scope = (InlineScope){0};
+    plat_once(&once, init, NULL);
+    unsigned event = 0;
+    if (icon_probe && kern_now_ns() < icon_deadline) {
+        uint64_t node = c->x[19], site = c->x[30], entry = c->x[1];
+        plat_mutex_lock(&glyph_lock);
+        unsigned calls = ++icon_bind_calls;
+        plat_mutex_unlock(&glyph_lock);
+        icon_count_note("bind", calls);
+        uint64_t source = 0, geom = 0, set = 0, first = 0;
+        if (plat_mem_readable(node, 0x3c0)) { source = rd64(node + 0x3b8); geom = rd64(node + 0x308); }
+        IconLookup lk;
+        icon_lookup(source, 0, &lk);   // header fields only: count, size, table pointer
+        if (source && lk.status != ICON_UNREADABLE) {
+            set = rd64(source + 0x40);
+            if (set && plat_mem_readable(set, 0x38)) first = rd64(set + 0x30);
+        }
+        unsigned draw1 = 0, draw2 = 0;
+        if (geom && plat_mem_readable(geom, 0x38)) { draw1 = rd32(geom + 0x34); draw2 = rd32(geom + 0x30); }
+        plat_mutex_lock(&glyph_lock);
+        int seen = icon_bind_events >= ICON_BIND_EVENTS;
+        for (unsigned i = 0; i < icon_bind_events && !seen; i++)
+            seen = icon_bind_seen[i].site == site && icon_bind_seen[i].source == source && icon_bind_seen[i].entry == entry;
+        int at_layout = 0;
+        for (unsigned i = 0; i < icon_source_count; i++) at_layout |= source && icon_sources[i] == source;
+        if (!seen) { icon_bind_seen[icon_bind_events] = (IconBindSeen){site, source, entry}; event = ++icon_bind_events; }
+        plat_mutex_unlock(&glyph_lock);
+        if (event) {
+            uint64_t q[15] = {0};
+            if (entry && plat_mem_readable(entry, sizeof q)) memcpy(q, (void *)(uintptr_t)entry, sizeof q);
+            probe_scope = (ProbeScope){c, ICON_BIND_EVENT_BASE + event, icon_deadline};
+            rt_log("glyph icon probe bind %u: site %llx node %llx source %llx %s at layout; source %s count %u size %.3fx%.3f "
+                   "set %llx entry0 %llx x1 %llx %s entry0; slot %u flag %u draw counts glyph %u second %u; "
+                   "entry %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx; texture follows as resource probe %u",
+                   event, (unsigned long long)site, (unsigned long long)node, (unsigned long long)source,
+                   at_layout ? "seen" : "NOT seen", icon_status_name(lk.status), lk.count, lk.w, lk.h,
+                   (unsigned long long)set, (unsigned long long)first, (unsigned long long)entry,
+                   first && entry == first ? "==" : "!=", (unsigned)c->x[2] & 0xff, (unsigned)c->x[3], draw1, draw2,
+                   (unsigned long long)q[0], (unsigned long long)q[1], (unsigned long long)q[2], (unsigned long long)q[3],
+                   (unsigned long long)q[4], (unsigned long long)q[5], (unsigned long long)q[6], (unsigned long long)q[7],
+                   (unsigned long long)q[8], (unsigned long long)q[9], (unsigned long long)q[10], (unsigned long long)q[11],
+                   (unsigned long long)q[12], (unsigned long long)q[13], (unsigned long long)q[14], ICON_BIND_EVENT_BASE + event);
+        }
+    }
+    if (inline_enabled) inline_arm(c);
+    original(c);
+    // The existing handle observer clears the scope when the original BindTexture import runs; a bind that never
+    // reaches it (cached or skipped) is reported instead of silently missing its texture line.
+    if (event && probe_scope.cpu == c && probe_scope.event)
+        rt_log("glyph icon probe bind %u: no BindTexture import reached during this bind (texture not observed)", event);
+    probe_scope = saved;
+    inline_scope = saved_inline;
+}
+
 int appendage_glyph_failure(const char *stage) {
     plat_once(&once, init, NULL);
     return enabled && !strcmp(failure, stage);
@@ -252,7 +481,12 @@ void appendage_glyph_bind(Cpu *c, uint64_t node, GuestFn original) {
 uint64_t appendage_glyph_handle(const Cpu *c, uint64_t original) {
     if (probe_scope.cpu==c && probe_scope.event && c->x[30]==MOD_MAIN_BASE+0x95c9cc) {
         unsigned event=probe_scope.event; probe_scope.event=0;
-        if (kern_now_ns()<probe_deadline) vk_glyph_resource_observe(original,event);
+        if (kern_now_ns()<probe_scope.deadline) vk_glyph_resource_observe(original,event);
+    }
+    if (inline_scope.cpu == c && inline_scope.id && c->x[30] == MOD_MAIN_BASE + 0x95c9cc && !(original >> 32)) {
+        uint64_t tagged = INLINE_GLYPH_TAG | (uint64_t)inline_scope.id << 32 | original;
+        inline_scope.id = 0;   // one handle per bind: later imports in this call keep their own
+        return vk_inline_capture_source(tagged, inline_scope.storage) ? tagged : original;
     }
     if (scope.cpu != c || !scope.generation || c->x[30] != MOD_MAIN_BASE + 0x95c9cc ||
         original >> 32 || (original & 0xfffff) != scope.tid) return original;
@@ -271,6 +505,27 @@ int appendage_glyph_source(uint64_t h, uint64_t serial, uint64_t storage) {
             if (!s->serial) s->serial = serial, s->storage = storage;
             valid = s->serial == serial && s->storage == storage;
         }
+    }
+    plat_mutex_unlock(&glyph_lock);
+    return valid;
+}
+
+int appendage_inline_signature(unsigned id, int8_t art[INLINE_ACTIONS]) {
+    int ok = 0;
+    plat_mutex_lock(&glyph_lock);
+    if (id && id <= inline_sig_count) { memcpy(art, inline_sigs[id - 1].art, INLINE_ACTIONS); ok = 1; }
+    plat_mutex_unlock(&glyph_lock);
+    return ok;
+}
+int appendage_inline_source(uint64_t h, uint64_t serial, uint64_t storage) {
+    if (!appendage_inline_tagged(h)) return 0;
+    unsigned id = appendage_inline_id(h);
+    int valid = 0;
+    plat_mutex_lock(&glyph_lock);
+    if (id && id <= inline_sig_count && serial && storage) {
+        InlineSignature *g = &inline_sigs[id - 1];
+        if (!g->serial) g->serial = serial, g->storage = storage;
+        valid = g->serial == serial && g->storage == storage;
     }
     plat_mutex_unlock(&glyph_lock);
     return valid;

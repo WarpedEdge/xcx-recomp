@@ -7,7 +7,12 @@ WORDS = {0x60f68c: 0x940c224d, 0xa27678: 0x9400802a,
          0xa2fac0: 0xa9bd7bfd, 0xa2fcd0: 0xd10203ff,
          0x5a665c: 0x9400d0c6, 0x5c6ed4: 0x94004ea8, 0x55ff1c: 0x9412f42b,
          0x5da974: 0x2a0103e2, 0x5da984: 0x17fe154f,
-         0x55fec0: 0xa9bd7bfd, 0x55fecc: 0x910003fd}
+         0x55fec0: 0xa9bd7bfd, 0x55fecc: 0x910003fd,
+         0xa21afc: 0xf9400c0a, 0xa325f8: 0x9400544a, 0xa32688: 0x94005426}
+# Opt-in icon probe sites, checked against the pinned main by build/.../verify_sites.py: 0xa21afc is the ML:icon layout
+# method (layouter vtable address point 0x1c93f08, slot +0x80); the two BLs in f_7000a322cc bind entry 0 of the icon
+# source's texture set (node+0x3b8) through the shared bind helper 0xa47720.
+ICON_SOURCE_BINDS = (0xa325f8, 0xa32688)
 
 
 def verified(mod):
@@ -22,7 +27,12 @@ def verified(mod):
 
 
 def entry(mod, address):
-    return 'appendage_glyph_retire(c->x[0]);' if address - mod.base in (0xa2fac0, 0xa2fcd0) else ''
+    offset = address - mod.base
+    if offset in (0xa2fac0, 0xa2fcd0):
+        return 'appendage_glyph_retire(c->x[0]);'
+    if offset == 0xa21afc:
+        return 'appendage_glyph_icon_layout(c);'
+    return ''
 
 
 def call(mod, address, target):
@@ -36,4 +46,7 @@ def call(mod, address, target):
     if offset == 0xa27678:
         assert target == mod.base + 0xa47720
         return f'appendage_glyph_bind(c, c->x[19], f_{target:x});'
+    if offset in ICON_SOURCE_BINDS:
+        assert target == mod.base + 0xa47720
+        return f'appendage_glyph_icon_bind(c, f_{target:x});'
     return f'f_{target:x}(c);'

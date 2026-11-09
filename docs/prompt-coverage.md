@@ -143,3 +143,17 @@ Soul Challenge's `02110_judgering_btn` image contains only the glowing circle. T
 ### NPC interaction acceptance — November 9, 2026
 
 Owner confirms the NPC interaction field-A prompt works on approach and updates appropriately with Button layout. Selected-draw logs show active selector 7 requesting translated artwork. Mark this NPC interaction instance visually accepted; other field-A captions, Target R and Board ZL remain unconfirmed. Gameplay Tips X/L/R/inline A remain native in the supplied screenshot. The scoped resource probe was armed and the completed recording has zero matching observations. Normal window close and exit 0 were verified: 186.08 seconds, 39,699 log bytes; no candidate process remains. Evidence: `build/glyph-actionable-20261109/completed-run-manifest.json`.
+
+
+## Inline text-icon replacement candidate — November 9, 2026
+
+Implemented in the trial branch and covered by automated tests; **not owner-accepted**. Details, tables and checks: [inline text route](glyph-inline-text-route.md).
+
+| Status | Prompts |
+| --- | --- |
+| Implemented, automated checks only (awaiting owner look) | A, B, X, Y, L, R, ZL, ZR (small and large) in `ST:icon` text: menu bottom hints and Control Guide (`MNU_CtrlInformation_ms`), large footer guides (`MNU_FooterGuide_ms`, including Settings reset X), Gameplay Tips (`MNU_TipsList_ms`), field hints (`FLD_HintList_ms`), `menu_program_ms`, common telops, option captions |
+| Native, layout-based prompts (owner-observed, not covered) | Tab L/R, page-turn R, `Details ZR`, popup `A Close`, `X Check Control Guide`; no text row exists for them, the route into their textures is not traced |
+| Owner-observed working | Tips text, field hint pop-up, Map footer with PlayStation/Xbox, layout changes, Standard and Colored; Keyboard & Mouse, Automatic and reopen behaviour not yet accepted |
+| Left native on purpose | `+`/`-`, D-pad, sticks, power/home/capture, compound symbols, premade tutorial images, unbound/shared/tileless bindings, Nintendo controllers under Automatic |
+| Unchanged | Accepted HUD guides (Appendage, weapon X, NPC interaction A) and the unconfirmed Target R / Board ZL |
+| Known limits | Colored tint through the text material is unverified; style changes reach the next layout (reopen the page); 24 signatures per session; atlas reload falls back to native |

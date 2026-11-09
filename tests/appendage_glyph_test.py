@@ -51,6 +51,8 @@ def main():
     run([unit, 'enabled'], env, out/'unit-enabled.log')
     run([unit, 'guides'], env, out/'unit-guides.log')
     run([unit, 'resources'], env, out/'unit-resources.log')
+    run([unit, 'icon'], env, out/'unit-icon.log')
+    run([unit, 'inline'], env, out/'unit-inline.log')
     run([unit, 'disabled'], dict(env, XCX_APPENDAGE_GLYPH='0'), out/'unit-disabled.log')
     run([sys.executable, ROOT/'tools/make_appendage_glyph.py', '--out', out/'pixels.inc'])
     assert (out/'pixels.inc').read_bytes() == (ROOT/'runtime/appendage_r1.inc').read_bytes()
@@ -63,6 +65,18 @@ def main():
     assert all(not any(surface.getpixel((x,y))) for y in range(192) for x in range(512)
                if not (384 <= x < 448 and 64 <= y < 128))
     assert hashlib.sha256(surface.tobytes()).hexdigest() == '7b8c592420373543f21fdcf90aa1fc8e7c39712d445c235fb31fa1c01d994ab0'
+    # The atlas record table is a closed form; its SHA-256 is the identity constant the runtime checks (inline_glyph.h).
+    import re, struct
+    def f32(x): return struct.unpack('<f', struct.pack('<f', x))[0]
+    table = b''.join(struct.pack('<ffffff', 1.0, 1.0, f32(45/368), f32(149/900), f32((i % 8*46 + 0.5)/368), f32((i//8*50 + 0.5)/300)) + struct.pack('<HH', 46, 50) for i in range(48))
+    header = (ROOT/'runtime/inline_glyph.h').read_text()
+    constant = bytes(int(x, 16) for x in re.search(r'INLINE_RECORDS_SHA256 \{([^}]*)\}', header.replace('\\\n', ' ')).group(1).replace(' ', '').split(',') if x)
+    assert len(table) == 1344 and hashlib.sha256(table).digest() == constant, 'closed-form atlas table does not match INLINE_RECORDS_SHA256'
+    cells = re.findall(r'\{(\d+), (\d), (\d+), (\d+), (\d+), (\d+)\}', header)
+    assert len(cells) == 16 and sorted(int(c[0]) for c in cells) == [5,6,7,8,13,14,15,16,29,30,31,32,37,38,39,40]
+    # Each action owns a standard and a large cell 24 records apart, and only those sixteen cells are ever replaced.
+    for rec, act, *_ in ((int(c[0]), int(c[1])) for c in cells):
+        assert any(int(o[0]) == (rec + 24 if rec < 24 else rec - 24) and int(o[1]) == act for o in cells)
     spec = importlib.util.spec_from_file_location('appendage', ROOT/'recomp/appendage.py')
     hooks = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hooks)
@@ -99,6 +113,22 @@ def main():
     assert 'appendage_glyph_lookup_attach' in hooks.call(module,module.base+0x55ff1c,module.base+0xa1cfc8)
     assert 'appendage_glyph_' not in hooks.call(module,module.base+0x55ff20,module.base+0xa1cfc8)
     assert hooks.entry(module, module.base+0xa2fac0) and hooks.entry(module, module.base+0xa2fcd0)
+    # Icon probe sites: the ML:icon layout method entry and the two binds of the icon source. Everything else keeps its
+    # original call, including the superseded 0xa21750 (vtable slot +0x78), the glyph-pass binds and the node+0x3c8 bind.
+    assert 'appendage_glyph_icon_layout' in hooks.entry(module, module.base+0xa21afc)
+    for other in (0xa21750, 0xa21afc+4, 0xa21e94):
+        assert not hooks.entry(module, module.base+other)
+    for site in (0xa325f8, 0xa32688):
+        assert 'appendage_glyph_icon_bind(c, f_7000a47720)' in hooks.call(module, module.base+site, module.base+0xa47720)
+    for site in (0xa32414, 0xa324c4, 0xa32540, 0xa32568, 0xa32770):
+        assert 'appendage_glyph_' not in hooks.call(module, module.base+site, module.base+0xa47720)
+    assert {0xa21afc, 0xa325f8, 0xa32688} <= set(hooks.WORDS)
+    assert not ({0xa21750, 0xa32414, 0xa324c4, 0xa32540, 0xa32770} & set(hooks.WORDS))
+    try:
+        hooks.call(module, module.base+0xa325f8, module.base+0xa47724)
+        raise AssertionError('Wrong bind target accepted')
+    except AssertionError as error:
+        assert str(error) != 'Wrong bind target accepted'
     assert not hooks.entry(module, module.base+0xa2fac4)
     print('Licensed pixels, exact hook identity/rejection and unrelated entry checks passed')
     if not args.gpu_build:
@@ -127,7 +157,7 @@ def main():
         print('GPU and SDL fixtures compiled only; no GPU/SDL tests started.')
         return
     run([sdl],env,out/'sdl.log')
-    for stage in ('normal', 'pixels', 'image', 'upload', 'view', 'source'):
+    for stage in ('normal', 'pixels', 'image', 'upload', 'blit', 'view', 'source'):
         stage_env = dict(env, XCX_VK_VALIDATION='1', GLYPH_TEST_CONFIG=str(out/f'settings-{stage}.ini'))
         if stage != 'normal':
             stage_env['XCX_APPENDAGE_GLYPH_FAIL'] = stage

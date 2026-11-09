@@ -41,3 +41,11 @@ int glyph_appearance_parse(const char *value);
 const char *glyph_art_name(unsigned art);
 unsigned glyph_art_count(void);
 int glyph_art_pixels(unsigned art, uint32_t *pixels); // 512x192 owned destination, all five verified UV tiles.
+// Inline text icons: the virtual buttons A, B, X, Y, L, R, ZL, ZR in that order. Each decision is made on its own (so one
+// ambiguous or unbound action keeps only itself native) from the same snapshot; art[i] is an art id or -1 for Original.
+// Unlike the guide actions above, these use every verified physical tile (face buttons, L/R, ZL/ZR) for the current layout.
+enum { GLYPH_INLINE_SET = 8 };
+void glyph_decide_inline_set(int preference, int source, int family, int layout, const InputMap *map, int appearance, int8_t art[GLYPH_INLINE_SET]);
+void glyph_current_inline_set(int8_t art[GLYPH_INLINE_SET]);
+// Fits a tile into the native glyph box of a 46x50 inline cell; see glyph_art.c. cell is 46*50 RGBA8.
+int glyph_art_inline_cell(unsigned art, int x, int y, int w, int h, uint32_t *cell);

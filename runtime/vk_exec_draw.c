@@ -1205,9 +1205,9 @@ static void tex_info_full(VkExec *ex, const GfxShaderRes *r, uint64_t h, int sto
         view_t v;
         int hv;
         const VkTexImage *img = vk_appendage_texture_locked(h, &v, &hv);
-        if (img && !(appendage_glyph_tagged(h) && appendage_glyph_failure("view")))
+        if (img && !(appendage_handle_tagged(h) && appendage_glyph_failure("view")))
             view = get_view(ex, img, &v, hv, r->type, storage), *image = img->image;
-        if (!view && appendage_glyph_tagged(h)) {
+        if (!view && appendage_handle_tagged(h)) {
             appendage_glyph_note_fallback();
             img = vk_texture_by_id_locked((int)(h & 0xfffff), &v, &hv);
             if (img) view = get_view(ex, img, &v, hv, r->type, storage), *image = img->image;
