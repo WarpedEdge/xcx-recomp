@@ -551,12 +551,18 @@ static void tab_screen(float scale) {
     opt_group(UI_MENU_GRAPHICS);
     row_output_res();
     row_render_scale();
-    static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR};
-    opt_choice("XCX_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
+    static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR, UI_MENU_UPSCALER_DLSS};
+    opt_choice("XCX_UPSCALER", UI_MENU_UPSCALER, up, 3, UI_MENU_UPSCALER_DESC);
     static const UiTextId fit[] = {UI_MENU_PICTURE_FIT_KEEP, UI_MENU_PICTURE_FIT_STRETCH};
     opt_choice("XCX_PICTURE_FIT", UI_MENU_PICTURE_FIT, fit, 2, UI_MENU_PICTURE_FIT_DESC);
     opt_slider("XCX_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     opt_slider("XCX_BRIGHTNESS", UI_MENU_BRIGHTNESS, 40, 120, UI_MENU_BRIGHTNESS_DESC, 5, "%.0f %%");
+    opt_group(UI_MENU_HDR_GROUP);
+    opt_toggle("XCX_HDR", UI_MENU_HDR, UI_MENU_HDR_DESC);
+    opt_slider("XCX_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 10000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f");
+    opt_slider("XCX_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f");
+    opt_slider("XCX_HDR_UI_NITS", UI_MENU_HDR_UI, 80, 500, UI_MENU_HDR_UI_DESC, 5, "%.0f");
+    opt_slider("XCX_HDR_HUE", UI_MENU_HDR_HUE, 0, 100, UI_MENU_HDR_HUE_DESC, 5, "%.0f %%");
     opt_end();
 }
 

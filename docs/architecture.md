@@ -94,6 +94,29 @@ Every guest thread is a host thread. XCX assumes Horizon's scheduler: three appl
   (MacNativeGames' sites); `resolution.c` sets them from `output_res` and `render_scale` and grows the texture heap
   and the application pool to match. When the window is larger than the output, `vk_fsr.c` runs AMD FSR 1 (EASU,
   RCAS) on the present.
+- DLSS (`vk_dlss.c`, `upscaler = dlss`, read at start; ported from TotK Recomp's `vk_dlaa.c`). NVIDIA DLSS through the
+  driver's NGX core loaded at run time (no SDK code compiled in), with `nvngx_dlss.dll` next to the exe. It replaces the
+  game's FXAA draw, which is also its scaling draw: DLSS reads the post-processed light target at the scene size and
+  writes the output-sized picture the interface is drawn over (DLAA at render scale 100, upscaling below). The scene's
+  draws get a sub-pixel Halton viewport jitter (full-screen draws excepted); camera motion vectors are reprojected from
+  the scene depth through this and last frame's view-projection of the scene camera block (vertex c3, 0x300 bytes), in
+  double precision on the CPU. Objects that move on their own get their own motion (`vk_exec_draw.c`, `XCX_DLSS_OBJMV`,
+  on by default): the shader translator keeps last frame's position output (patch 0010), and a second pass redraws each
+  moving draw into the motion target with an equal depth test, reading last frame's place and bone palette from a GPU
+  copy taken after the frame's motion pass. A menu's model view (Ground Gear, Fashion Gear) is a G-buffer of its own and
+  gets a DLAA feature at its size; its scaling draw writes colour only, so `dlss_rgb.comp` puts DLSS's picture back under
+  the target's own alpha.
+- HDR (`hdr = 1`, `vk_hdr.c`, after TotK Recomp's). The game's tonemap pass scales its r11g11b10f scene by the
+  exposure gain, clamps it to 0..1 and grades it through a 16x16x16 LUT, writing back into the same image; FXAA draws
+  that into the 8-bit window texture, which clips it, and the HUD goes on top. With HDR on, the tonemap's fragment
+  shader (recognised by its constant and resource names, not a hash) runs as `shaders/hdr_tonemap.frag`: within the
+  SDR white it is the game's, above it the LUT grades the colour scaled into range and highlights go on up to the
+  display's peak, stored in the float image. The present takes the window texture and, where it shows the scene, adds
+  back what the float image holds above the SDR white (a menu or movie frame, drawn without the tonemap, stays SDR);
+  a compute pass turns that into PQ code values in Rec. 2020 for an HDR10 swapchain, which FSR 1 or the blit then
+  scale; the in-game menu is drawn into an RGBA8 image and blended on at the HUD's white. Without an HDR10 surface
+  format (Windows with "Use HDR" off, a compositor without colour management) the swapchain and the tonemap stay SDR.
+  `XCX_SHOTS` reads the window texture, so its pictures clip highlights in HDR.
 - Occlusion queries never block the CPU; a result that is not ready counts as visible.
 - ASTC textures are uploaded as they are where the device reports `textureCompressionASTC_LDR`, and decoded by a compute shader everywhere else (`vk_astc.c`, `XCX_ASTC`). The CPU decoder (`tex_astc*.c`) is the fallback and the test oracle.
 - Draw state. A draw whose program, bound state and textures repeat reuses the previous draw's shaders and skips rebuilding its descriptor sets; descriptor sets are written through update templates (`vk_exec_draw.c`, `vk_pipeline.c`).

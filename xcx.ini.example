@@ -123,7 +123,9 @@
 # start.
 # render_scale = game
 # Scaling to the window when it is larger than the game resolution: fsr (AMD FSR 1) or bilinear, and FSR's sharpening
-# from 0 (off) to 100. Changes while the game runs take effect at once.
+# from 0 (off) to 100. Changes while the game runs take effect at once. dlss (NVIDIA RTX cards, nvngx_dlss.dll next to
+# xcx.exe) also runs DLSS on the 3D scene in place of the game's FXAA: DLAA at render_scale game or 100, DLSS upscaling
+# below; the window scaling stays FSR 1. Switching to or from dlss takes effect after a restart.
 # upscaler = fsr
 # sharpness = 80
 # Picture brightness in percent, from 40 to 120: the gain of the game's final tonemap. Lower it if daylight, water or
@@ -132,6 +134,17 @@
 # Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
 # proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
 # picture_fit = keep
+
+# HDR output: hdr = 1 sends the picture as HDR10 (needs HDR on in Windows, "Use HDR", or a Wayland compositor with
+# colour management; without it the picture stays SDR). The game's tonemap keeps highlights up to hdr_peak_nits (your
+# display's peak); hdr_game_nits is the picture's white (paper white, 203 is the HDR reference) and hdr_ui_nits the
+# HUD's and the menu's. hdr_hue (0 to 100) is how far bright colours turn towards white as they do in SDR. hdr is read
+# at start, the others at once. brightness above still sets the game's exposure in HDR.
+# hdr = 0
+# hdr_peak_nits = 1000
+# hdr_game_nits = 203
+# hdr_ui_nits = 203
+# hdr_hue = 50
 
 [language]
 # Language: a Windows locale such as de-DE, or a Switch code (en-US, ja, zh-Hant, ...). Default: the Windows locale.
