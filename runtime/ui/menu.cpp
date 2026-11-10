@@ -585,30 +585,20 @@ static void tab_sound(float scale) {
     opt_end();
 }
 
-// "in use: Xbox" under the layout when it is Automatic and a gamepad is connected; NULL otherwise.
-static const char *pad_layout_note(void) {
-    int got = input_pad_layout();
-    if (got < 0 || strcmp(cfg_value("XCX_PAD_LAYOUT"), "auto")) return nullptr;
-    static char note[96];
-    snprintf(note, sizeof note, menu_text(UI_MENU_PAD_LAYOUT_IN_USE),
-             menu_text(got == PAD_LAYOUT_XBOX ? UI_MENU_PAD_LAYOUT_XBOX : UI_MENU_PAD_LAYOUT_NINTENDO));
-    return note;
-}
-
 static void tab_controls(float scale) {
     opt_begin("##controls", scale);
-    static const char *const glyph_values[] = {"original","auto","playstation","xbox","steam","keyboard"};
-    static const char *const glyph_names[] = {"Original (unchanged)","Automatic","PlayStation","Xbox","Steam Controller","Keyboard / Mouse"};
+    static const char *const glyph_values[] = {"auto","original","playstation","xbox","steam","keyboard"};
+    static const char *const glyph_names[] = {"Automatic","Nintendo Switch","PlayStation","Xbox","Steam Controller","Keyboard/Mouse"};
     if (!glyph_build_supported()) opt_disable_next(UI_MENU_GLYPH_UNSUPPORTED);
     opt_choice_list("XCX_GLYPH_STYLE", UI_MENU_GLYPH_STYLE, glyph_values, glyph_names, GLYPH_STYLE_COUNT,
-                    UI_MENU_GLYPH_STYLE_DESC, -1, glyph_status());
-    static const char *const appearance_values[] = {"standard","colored"};
-    static const char *const appearance_names[] = {"Standard","Colored face buttons"};
+                    UI_MENU_GLYPH_STYLE_DESC);
+    static const char *const appearance_values[] = {"colored","standard"};
+    static const char *const appearance_names[] = {"Colored","Standard"};
     if (!glyph_build_supported()) opt_disable_next(UI_MENU_GLYPH_UNSUPPORTED);
     opt_choice_list("XCX_GLYPH_APPEARANCE", UI_MENU_GLYPH_APPEARANCE, appearance_values, appearance_names, 2,
                     UI_MENU_GLYPH_APPEARANCE_DESC);
     static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
-    opt_choice("XCX_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
+    opt_choice("XCX_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC);
     opt_toggle("XCX_MOTION", UI_MENU_MOTION, UI_MENU_MOTION_DESC);
     opt_slider("XCX_RUMBLE_STRENGTH", UI_MENU_RUMBLE_STRENGTH, 0, 300, UI_MENU_RUMBLE_STRENGTH_DESC, 10, "%.0f %%");
     opt_slider("XCX_RUMBLE_CURVE", UI_MENU_RUMBLE_CURVE, 0.2f, 1.5f, UI_MENU_RUMBLE_CURVE_DESC, 0.05f, "%.2f");
