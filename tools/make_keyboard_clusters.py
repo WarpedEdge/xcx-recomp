@@ -76,6 +76,13 @@ def main():
                            'members': [{'member': f'Keyboard & Mouse/Default/{n}.png',
                                         'sha256': hashlib.sha256((folder / f'{n}.png').read_bytes()).hexdigest()} for n in used],
                            'sha256': hashlib.sha256((dst / file).read_bytes()).hexdigest()})
+    # Shift (the default B key) is one more plain pinned Kenney tile; it comes after the 128 tiles the HUD route can address.
+    shift = folder / 'keyboard_shift.png'
+    if not any(x['file'] == 'keyboard_shift.png' for x in assets):
+        (dst / 'keyboard_shift.png').write_bytes(shift.read_bytes())
+        assets.insert(sum(1 for x in assets if not x.get('derived')), {
+            'style': 'KEYBOARD', 'input': 'KEY_LSHIFT', 'member': 'Keyboard & Mouse/Default/keyboard_shift.png',
+            'sha256': hashlib.sha256(shift.read_bytes()).hexdigest(), 'file': 'keyboard_shift.png'})
     names = CLUSTERS[0][2]
     file = 'keyboard_cluster_arrows_lit_horizontal.png'
     compose_lit_horizontal([key_image(folder / f'{n}.png') for n in names]).save(dst / file)

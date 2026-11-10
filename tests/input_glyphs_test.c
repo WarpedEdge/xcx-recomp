@@ -79,6 +79,8 @@ int main(void){
  for(int i=0;i<input_map.nkeys;i++)if(input_map.keys[i].action==B_X)input_map.keys[i].key=KEY_F12;
  CHECK(strstr(glyph_status(),"weapon: Original virtual labels"));input_map=original;
  CHECK(glyph_decide_button(GLYPH_KEYBOARD,GLYPH_SOURCE_KEYBOARD,GLYPH_PAD_PS,1,&input_map,B_X).art[0]==glyph_art_find(GLYPH_KEYBOARD,KEY_SPACE));
+ CHECK(glyph_art_find(GLYPH_KEYBOARD,KEY_LSHIFT)>=GLYPH_ART_MAX);   // Shift: a tile past the 128 the HUD route can address
+ { int16_t sym[GLYPH_SYMBOLS]; glyph_decide_symbol_set(GLYPH_KEYBOARD,GLYPH_SOURCE_KEYBOARD,GLYPH_PAD_PS,1,&input_map,GLYPH_STANDARD,sym); CHECK(sym[SYM_B]==glyph_art_find(GLYPH_KEYBOARD,KEY_LSHIFT)); }   // B on Shift
  CHECK(glyph_decide_button(GLYPH_XBOX,GLYPH_SOURCE_PAD,GLYPH_PAD_XBOX,1,&input_map,B_A).art[0]==glyph_art_find(GLYPH_XBOX,PAD_SOUTH));
  CHECK(glyph_decide_button(GLYPH_XBOX,GLYPH_SOURCE_PAD,GLYPH_PAD_XBOX,1,&input_map,B_B).style==GLYPH_ORIGINAL);
  CHECK(glyph_style_parse("switch")==GLYPH_ORIGINAL);

@@ -345,11 +345,11 @@ int main(int argc, char **argv) {
         // ---- tile fitting: art stays inside the native glyph box of every replaceable cell of both layouts, centred
         { static uint32_t cell[88*88];
           for (int layout=0;layout<INLINE_LAYOUTS;layout++) {
-              const int cw=layout==2?STICKS_CELL:layout?SHEET_CELL:INLINE_CELL_W, ch=layout==2?STICKS_CELL:layout?SHEET_CELL:INLINE_CELL_H;
-              const int records=layout==2?STICKS_RECORDS:layout?SHEET_RECORDS:INLINE_RECORDS;
+              const int cw=layout==2?STICKS_CELL:layout==1?SHEET_CELL:INLINE_CELL_W, ch=layout==2?STICKS_CELL:layout==1?SHEET_CELL:INLINE_CELL_H;
+              const int records=layout==2?STICKS_RECORDS:layout==1?SHEET_RECORDS:INLINE_RECORDS;
               for (int k=0;k<records;k++) {
                   int sym=layout==2?SYM_SLV+k:k%SYM_PER_SHEET; if (!inline_symbol_replaceable((unsigned)sym)) continue;
-                  const InlineBox *ic=layout==2?&inline_stick_boxes[k]:layout?&inline_sheet_boxes[k]:&inline_font_boxes[k/SYM_PER_SHEET][sym];
+                  const InlineBox *ic=layout==2?&inline_stick_boxes[k]:layout==1?&inline_sheet_boxes[k]:&inline_font_boxes[k/SYM_PER_SHEET][sym];
                   for (unsigned a=0;a<glyph_art_count();a++) {
                       assert(glyph_art_cell(a,cw,ch,ic->x,ic->y,ic->w,ic->h,cell));
                       int x0=cw,y0=ch,x1=-1,y1=-1; unsigned opaque=0;

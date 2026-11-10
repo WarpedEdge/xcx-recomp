@@ -7,7 +7,7 @@
 #include "layout.h"
 #include "nvn_tex.h"
 #include "inline_atlas_fixture.h"
-static const void *fixture_prefix, *fixture_prefix2;
+static const void *fixture_prefix, *fixture_prefix2, *fixture_hint, *fixture_soul, *fixture_hold;
 static int g_pad_snapshot;   // 1: report a connected PlayStation pad with default bindings (pad styles need one)
 void __real_input_glyph_snapshot(int *source, int *family, int *layout, InputMap *map);
 void __wrap_input_glyph_snapshot(int *source, int *family, int *layout, InputMap *map) {
@@ -19,6 +19,18 @@ void __wrap_sha256(const void *p, size_t n, uint8_t h[32]) {
     if (p == fixture_prefix2 && n == 128) {   // the stick-direction image's resource object: its guard hash
         static const uint8_t sticks[32] = STICKS_GUARD_SHA256;
         memcpy(h, sticks, 32); return;
+    }
+    if (p == fixture_hint && n == HINT_BYTES) {   // the mini-map hint image's texture memory: the pinned content hash
+        static const uint8_t hint[32] = HINT_NATIVE_SHA256;
+        memcpy(h, hint, 32); return;
+    }
+    if (p == fixture_hold && n == HOLD_BYTES) {   // the held field-action button's texture memory: the pinned content hash
+        static const uint8_t hold[32] = HOLD_NATIVE_SHA256;
+        memcpy(h, hold, 32); return;
+    }
+    if (p == fixture_soul && n == SOUL_BYTES) {   // the Soul Challenge button image's texture memory: the pinned content hash
+        static const uint8_t soul[32] = SOUL_NATIVE_SHA256;
+        memcpy(h, soul, 32); return;
     }
     if ((p != fixture_prefix || n != 128) && n != 84) { __real_sha256(p, n, h); return; }
     const uint8_t expected[32] = {0xed,0x91,0x64,0xc1,0x3b,0xf5,0x5b,0x99,0x9b,0xf7,0x8b,0xe9,0xd5,0x2d,0x3b,0x65,
@@ -87,14 +99,20 @@ static void inline_import(Cpu *c) {   // the BindTexture import inside the guest
     c->x[30] = lr;
 }
 static pool_t *g_pool; static const char *g_settings, *g_stage; static uint8_t *g_resource, *g_resource2;
+// width, height, cell width, cell height, columns, records of each layout
+static const unsigned test_geom[INLINE_LAYOUTS][6] = {   // (the hint image has its own test, check_hint)
+    {INLINE_ATLAS_W, INLINE_ATLAS_H, INLINE_CELL_W, INLINE_CELL_H, INLINE_COLUMNS, INLINE_RECORDS},
+    {SHEET_W, SHEET_H, SHEET_CELL, SHEET_CELL, SHEET_COLUMNS, SHEET_RECORDS},
+    {STICKS_W, STICKS_H, STICKS_CELL, STICKS_CELL, STICKS_COLUMNS, STICKS_RECORDS},
+};
 
 // ---- one inline layout end to end: a synthetic BC7 image of solid blocks, the guest-side arming, the tag, the capture, the
 // composite built on the GPU and read back. layout 0: the 368x300 text atlas (slot 825); layout 1: the 512x192 icon_button sheet
 // (slot 826), armed through a type-1 pane.
 static void check_layout(int layout) {
-    const unsigned AW = layout == 2 ? STICKS_W : layout ? SHEET_W : INLINE_ATLAS_W, AH = layout == 2 ? STICKS_H : layout ? SHEET_H : INLINE_ATLAS_H, BW = AW / 4, BH = AH / 4;
-    const unsigned CW = layout == 2 ? STICKS_CELL : layout ? SHEET_CELL : INLINE_CELL_W, CH = layout == 2 ? STICKS_CELL : layout ? SHEET_CELL : INLINE_CELL_H;
-    const unsigned RECORDS = layout == 2 ? STICKS_RECORDS : layout ? SHEET_RECORDS : INLINE_RECORDS, COLUMNS = layout == 2 ? STICKS_COLUMNS : layout ? SHEET_COLUMNS : INLINE_COLUMNS;
+    const unsigned AW = test_geom[layout][0], AH = test_geom[layout][1], BW = (AW + 3) / 4, BH = (AH + 3) / 4;   // the white-mask image is 150 rows: its last block row is partial
+    const unsigned CW = test_geom[layout][2], CH = test_geom[layout][3];
+    const unsigned RECORDS = test_geom[layout][5], COLUMNS = test_geom[layout][4];
     const unsigned slot = 825 + layout; import_slot = slot;
     const char *stage = g_stage;
     tex_t atlas = {.d = {.target = NVN_TEXTURE_TARGET_2D, .format = INLINE_NVN_FORMAT, .flags = NVN_TEXTURE_FLAGS_LINEAR,
@@ -153,9 +171,10 @@ static void check_layout(int layout) {
         for (unsigned k = 0; k < RECORDS; k++) {
             unsigned sym = layout == 2 ? SYM_SLV + k : k % SYM_PER_SHEET;
             if (arts[sym] < 0 || !inline_symbol_replaceable(sym)) continue;
-            const InlineBox *box = layout == 2 ? &inline_stick_boxes[k] : layout ? &inline_sheet_boxes[k] : &inline_font_boxes[k / SYM_PER_SHEET][sym];
+            const InlineBox *box = layout == 2 ? &inline_stick_boxes[k] : layout == 1 ? &inline_sheet_boxes[k] : &inline_font_boxes[k / SYM_PER_SHEET][sym];
             uint32_t cell[88 * 88];
-            assert(glyph_art_cell((unsigned)arts[sym], (int)CW, (int)CH, box->x, box->y, box->w, box->h, cell));
+            const int round_cell = layout == 1 && (sym == SYM_X || sym == SYM_Y || sym == SYM_A || sym == SYM_B);
+            assert((round_cell ? glyph_art_cell_round : glyph_art_cell)((unsigned)arts[sym], (int)CW, (int)CH, box->x, box->y, box->w, box->h, cell));
             unsigned cx = (k % COLUMNS) * CW, cy = (k / COLUMNS) * CH;
             for (unsigned y = 0; y < CH; y++) for (unsigned x = 0; x < CW; x++) want[(cy + y) * AW + cx + x] = cell[y * CW + x];
             replaced++;
@@ -209,6 +228,162 @@ static void check_layout(int layout) {
     // atlas.mem stays allocated until the process ends: the renderer keys its texture cache by address, so a freed block that a later
     // layout reuses would be served stale content (the runtime keeps its own owned-image buffers alive for the same reason).
     free(blocks);
+}
+// The mini-map hint: a plain handle to a 204x176 RGBA8 texture whose memory hashes to the pinned image (the hash is faked for the
+// fixture memory only). Two cells are replaced; a texture of the same shape with other content, and the Original style, stay native.
+static void check_hint(void) {
+    const unsigned slot = 840, other = 841, W = HINT_W, H = HINT_H;
+    const char *stage = g_stage;
+    const int expected_base = strcmp(stage, "pixels") && strcmp(stage, "image") && strcmp(stage, "upload") && strcmp(stage, "blit") && strcmp(stage, "source");
+    tex_t hint = {.d = {.target = NVN_TEXTURE_TARGET_2D, .format = HINT_NVN_FORMAT, .flags = NVN_TEXTURE_FLAGS_LINEAR,
+                        .width = W, .height = H, .depth = 1, .levels = 1, .stride = W * 4}, .pool = g_pool, .serial = 51};
+    nvn_tex_layout(&hint.d, &hint.L);
+    uint32_t *mem = calloc(1, HINT_BYTES); assert(mem && hint.L.size <= HINT_BYTES);
+    for (unsigned y = 0; y < H; y++) for (unsigned x = 0; x < W; x++) mem[y * W + x] = block_rgba((int)x / 4, (int)y / 4);
+    hint.mem = (uint8_t *)mem; fixture_hint = mem;
+    vk_texture_register(slot, &hint, NULL);
+    tex_t twin = hint; twin.serial = 52; twin.mem = calloc(1, HINT_BYTES); assert(twin.mem);   // same shape, other content: its hash is the real one
+    memcpy(twin.mem, mem, (size_t)W * H * 4);
+    vk_texture_register(other, &twin, NULL);
+    g_pad_snapshot = 0;
+    cfg_set("XCX_GLYPH_STYLE", "original"); cfg_set("XCX_GLYPH_APPEARANCE", "standard");
+    assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+    vk_texture_lock();
+    const VkTexImage *native = vk_texture_by_id_locked((int)slot, NULL, NULL); assert(native);
+    assert(vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL) == native);   // Original: native
+    vk_texture_unlock();
+    cfg_set("XCX_GLYPH_STYLE", "keyboard");
+    assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+    vk_texture_lock();
+    const VkTexImage *picked = vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL);
+    assert(picked && ((picked == native) == !expected_base));
+    if (expected_base) {
+        const unsigned sig = appendage_plain_signature(INLINE_LAYOUT_HINT); assert(sig);
+        int16_t arts[GLYPH_SYMBOLS]; int layout = -1; assert(appendage_inline_signature(sig, arts, &layout) && layout == INLINE_LAYOUT_HINT);
+        uint32_t *want = malloc((size_t)W * H * 4), *got = malloc((size_t)W * H * 4); assert(want && got);
+        memcpy(want, mem, (size_t)W * H * 4);
+        unsigned replaced = 0;
+        for (unsigned k = 0; k < HINT_CELLS; k++) {
+            const unsigned sym = k ? SYM_CRS : SYM_R;
+            if (arts[sym] < 0) continue;
+            uint32_t cell[HINT_CELL_W * HINT_CELL_H]; const unsigned cw = hint_cell_dims[k][0], ch = hint_cell_dims[k][1];
+            assert(glyph_art_cell((unsigned)arts[sym], (int)cw, (int)ch, hint_boxes[k].x, hint_boxes[k].y, hint_boxes[k].w, hint_boxes[k].h, cell));
+            glyph_art_shadowed(cell, (int)cw, (int)ch);   // the soft shadow around the glyph
+            for (unsigned y = 0; y < ch; y++) for (unsigned x = 0; x < cw; x++) want[(hint_origins[k][1] + y) * W + hint_origins[k][0] + x] = cell[y * cw + x];
+            replaced++;
+        }
+        assert(replaced == 2);   // the keyboard style draws the R key and the 1-4 cluster
+        read_image(picked, W, H, (size_t)W * H * 4, got);
+        { unsigned bad = 0; for (unsigned i = 0; i < W * H; i++) if (want[i] != got[i]) { if (!bad++) fprintf(stderr, "hint first mismatch %u,%u: want %08x got %08x\n", i % W, i / W, want[i], got[i]); }
+          if (bad) { fprintf(stderr, "hint: %u mismatching texels\n", bad); assert(0); } }
+        read_image(native, W, H, (size_t)W * H * 4, got);   // the native image is untouched
+        assert(!memcmp(got, mem, (size_t)W * H * 4));
+        assert(vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL) == picked);   // one owned image per signature
+        cfg_set("XCX_BIND_R", "key:t,pad:r"); assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+        const VkTexImage *second = vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL);   // another binding, another image
+        assert(second && second != picked && second != native);
+        cfg_set("XCX_BIND_R", "key:r,pad:r"); assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+        assert(vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL) == picked);
+        free(want); free(got);
+    }
+    {   // A pad style draws the D-pad with its down button lit (not the whole D-pad), and the slot's token follows the signature.
+        const uint64_t token_before = vk_texture_slot_token((int)slot);
+        g_pad_snapshot = 1; cfg_set("XCX_GLYPH_STYLE", "playstation"); assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+        const VkTexImage *pad = vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL);
+        if (expected_base) {
+            assert(pad && pad != native);
+            int16_t all[GLYPH_SYMBOLS], arts[GLYPH_SYMBOLS]; int layout = -1;
+            glyph_current_symbol_set(all);
+            assert(appendage_inline_signature(appendage_plain_signature(INLINE_LAYOUT_HINT), arts, &layout) && layout == INLINE_LAYOUT_HINT);
+            assert(all[SYM_CRSD] >= 0 && arts[SYM_CRS] == all[SYM_CRSD] && arts[SYM_R] == all[SYM_R] && arts[SYM_CRSD] < 0);
+            if (token_before) assert(vk_texture_slot_token((int)slot) != token_before);
+        }
+        g_pad_snapshot = 0;
+    }
+    // The same shape with other content is not the hint.
+    assert(vk_appendage_texture_locked(0x10000000u | other, NULL, NULL) == vk_texture_by_id_locked((int)other, NULL, NULL));
+    vk_texture_unlock();
+}
+// The Soul Challenge button: a 96x96 RGBA8 texture whose memory hashes to the pinned image (faked for the fixture only). The whole image
+// is replaced by the style's B tile as a mask (white disc, the glyph a hole); Original stays native.
+static void check_soul(void) {
+    const unsigned slot = 842, W = SOUL_W, H = SOUL_H;
+    const int expected_base = strcmp(g_stage, "pixels") && strcmp(g_stage, "image") && strcmp(g_stage, "upload") && strcmp(g_stage, "blit") && strcmp(g_stage, "source");
+    tex_t soul = {.d = {.target = NVN_TEXTURE_TARGET_2D, .format = HINT_NVN_FORMAT, .flags = NVN_TEXTURE_FLAGS_LINEAR,
+                        .width = W, .height = H, .depth = 1, .levels = 1, .stride = W * 4}, .pool = g_pool, .serial = 61};
+    nvn_tex_layout(&soul.d, &soul.L);
+    uint32_t *mem = calloc(1, SOUL_BYTES); assert(mem && soul.L.size <= SOUL_BYTES);
+    for (unsigned y = 0; y < H; y++) for (unsigned x = 0; x < W; x++) mem[y * W + x] = block_rgba((int)x / 4, (int)y / 4);
+    soul.mem = (uint8_t *)mem; fixture_soul = mem;
+    vk_texture_register(slot, &soul, NULL);
+    g_pad_snapshot = 0;
+    cfg_set("XCX_GLYPH_STYLE", "original"); cfg_set("XCX_GLYPH_APPEARANCE", "standard");
+    assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+    vk_texture_lock();
+    const VkTexImage *native = vk_texture_by_id_locked((int)slot, NULL, NULL); assert(native);
+    assert(vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL) == native);
+    vk_texture_unlock();
+    cfg_set("XCX_GLYPH_STYLE", "keyboard"); assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+    vk_texture_lock();
+    const VkTexImage *picked = vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL);
+    assert(picked && ((picked == native) == !expected_base));
+    if (expected_base) {
+        int16_t arts[GLYPH_SYMBOLS]; int layout = -1;
+        assert(appendage_inline_signature(appendage_plain_signature(INLINE_LAYOUT_SOUL), arts, &layout) && layout == INLINE_LAYOUT_SOUL);
+        assert(arts[SYM_B] >= 0);
+        uint32_t *want = malloc((size_t)W * H * 4), *got = malloc((size_t)W * H * 4), *cell = malloc((size_t)W * H * 4); assert(want && got && cell);
+        assert(glyph_art_cell((unsigned)arts[SYM_B], (int)W, (int)H, soul_box.x, soul_box.y, soul_box.w, soul_box.h, cell));
+        glyph_art_to_mask(cell, (int)(W * H));
+        memcpy(want, cell, (size_t)W * H * 4);
+        read_image(picked, W, H, (size_t)W * H * 4, got);
+        { unsigned bad = 0; for (unsigned i = 0; i < W * H; i++) if (want[i] != got[i]) { if (!bad++) fprintf(stderr, "soul first mismatch %u,%u: want %08x got %08x\n", i % W, i / W, want[i], got[i]); }
+          if (bad) { fprintf(stderr, "soul: %u mismatching texels\n", bad); assert(0); } }
+        read_image(native, W, H, (size_t)W * H * 4, got);
+        assert(!memcmp(got, mem, (size_t)W * H * 4));   // the native image is untouched
+        free(want); free(got); free(cell);
+    }
+    vk_texture_unlock();
+}
+// The held field-action button: a 64x64 BC7 texture whose memory hashes to the pinned image (faked for the fixture only). The whole
+// image is replaced by the drawn teal ring and disc with the style's A tile in the middle; Original stays native.
+static void check_hold(void) {
+    const unsigned slot = 843, W = HOLD_W, H = HOLD_H;
+    const int expected_base = strcmp(g_stage, "pixels") && strcmp(g_stage, "image") && strcmp(g_stage, "upload") && strcmp(g_stage, "blit") && strcmp(g_stage, "source");
+    tex_t hold = {.d = {.target = NVN_TEXTURE_TARGET_2D, .format = INLINE_NVN_FORMAT, .flags = NVN_TEXTURE_FLAGS_LINEAR,
+                        .width = W, .height = H, .depth = 1, .levels = 1, .stride = (W / 4) * 16}, .pool = g_pool, .serial = 71};
+    nvn_tex_layout(&hold.d, &hold.L);
+    uint8_t *mem = calloc(1, HOLD_BYTES > hold.L.size ? HOLD_BYTES : hold.L.size); assert(mem);
+    for (unsigned by = 0; by < H / 4; by++) for (unsigned bx = 0; bx < W / 4; bx++) {
+        uint32_t col = block_rgba((int)bx, (int)by);
+        bc7_solid(mem + ((size_t)by * (W / 4) + bx) * 16, (col & 255) / 2, (col >> 8 & 255) / 2, (col >> 16 & 255) / 2, 127);
+    }
+    hold.mem = mem; fixture_hold = mem;
+    vk_texture_register(slot, &hold, NULL);
+    g_pad_snapshot = 0;
+    cfg_set("XCX_GLYPH_STYLE", "original"); cfg_set("XCX_GLYPH_APPEARANCE", "standard");
+    assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+    vk_texture_lock();
+    const VkTexImage *native = vk_texture_by_id_locked((int)slot, NULL, NULL); assert(native);
+    assert(vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL) == native);
+    vk_texture_unlock();
+    cfg_set("XCX_GLYPH_STYLE", "keyboard"); assert(cfg_save_to(g_settings)); assert(cfg_load(g_settings));
+    vk_texture_lock();
+    const VkTexImage *picked = vk_appendage_texture_locked(0x10000000u | slot, NULL, NULL);
+    assert(picked && ((picked == native) == !expected_base));
+    if (expected_base) {
+        int16_t arts[GLYPH_SYMBOLS]; int layout = -1;
+        assert(appendage_inline_signature(appendage_plain_signature(INLINE_LAYOUT_HOLD), arts, &layout) && layout == INLINE_LAYOUT_HOLD);
+        assert(arts[SYM_A] >= 0);
+        uint32_t *want = malloc((size_t)W * H * 4), *got = malloc((size_t)W * H * 4); assert(want && got);
+        assert(glyph_art_cell((unsigned)arts[SYM_A], (int)W, (int)H, hold_box.x, hold_box.y, hold_box.w, hold_box.h, want));
+        glyph_art_hold_button(want, (int)W, (int)H);
+        read_image(picked, W, H, (size_t)W * H * 4, got);
+        { unsigned bad = 0; for (unsigned i = 0; i < W * H; i++) if (want[i] != got[i]) { if (!bad++) fprintf(stderr, "hold first mismatch %u,%u: want %08x got %08x\n", i % W, i / W, want[i], got[i]); }
+          if (bad) { fprintf(stderr, "hold: %u mismatching texels\n", bad); assert(0); } }
+        assert((want[0] >> 24) == 0 && (want[32 * W + 9] >> 24) >= 250);   // the corner is clear, the ring is there
+        free(want); free(got);
+    }
+    vk_texture_unlock();
 }
 int __wrap_main(int argc, char **argv) {
     assert(argc==2); cfg_init();
@@ -279,6 +454,9 @@ int __wrap_main(int argc, char **argv) {
     check_layout(0);
     check_layout(1);
     check_layout(2);
+    check_hint();
+    check_soul();
+    check_hold();
     g_pad_snapshot = 0;
     int validation = vk_ctx()->validation;
     vk_upload_flush(1); vk_mem_shutdown(); vk_shutdown();

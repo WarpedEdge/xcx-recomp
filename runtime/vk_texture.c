@@ -31,6 +31,7 @@
 #include "vk.h"
 #include "vk_exec.h"
 #include "platform/platform.h"
+#include "sha256.h"
 
 typedef struct {
     uint64_t addr;
@@ -127,6 +128,12 @@ static void rbq_remove(struct Tex *e);
 static uint32_t tex_gen = 1;
 // Bumped with tex_gen and whenever a slot is registered: what vk_texture_by_id returns for any slot may have changed.
 static uint32_t slots_gen = 1;
+// The mini-map hint is drawn through a plain handle the guest never changes, so the draw memos (which key on the handle and the slot's
+// token) would keep the image of the first style forever. The hint slot's token therefore carries an epoch that moves whenever the
+// style gives the hint another signature (see vk_appendage_texture_locked).
+enum { PLAIN_KINDS = 3 };   // the baked images recognized by content: the mini-map hint, the Soul Challenge button, the held field-action button
+static int plain_slot[PLAIN_KINDS] = {-1, -1};
+static uint32_t plain_epoch[PLAIN_KINDS], plain_last_sig[PLAIN_KINDS];
 static uint32_t samp_gen = 1;   // bumped whenever a sampler slot is registered: vk_sampler_by_id may answer otherwise
 static uint64_t n_checks;    // draw-binding storage checks (make_fresh_snap) since the last perf line
 // tex_gen per storage address (hashed): a slot resolves through the entries at its own address only (slot_resolve), so
@@ -1084,7 +1091,10 @@ uint64_t vk_texture_slot_token(int id) {
     const uint64_t *si = __atomic_load_n(&sinfo, __ATOMIC_ACQUIRE);
     if (!si || id < 0 || id >= (1 << 20)) return 0;
     uint64_t v = __atomic_load_n(&si[id], __ATOMIC_ACQUIRE);
-    return v ? (v >> 16) << 32 | __atomic_load_n(&agen[v & 0xffff], __ATOMIC_ACQUIRE) : 0;
+    uint64_t t = v ? (v >> 16) << 32 | __atomic_load_n(&agen[v & 0xffff], __ATOMIC_ACQUIRE) : 0;
+    for (int k = 0; t && k < PLAIN_KINDS; k++)
+        if (id == __atomic_load_n(&plain_slot[k], __ATOMIC_ACQUIRE)) { t ^= (uint64_t)__atomic_load_n(&plain_epoch[k], __ATOMIC_ACQUIRE) << (8 * k); if (!t) t = 1; }
+    return t;
 }
 uint32_t vk_sampler_gen(void) { return __atomic_load_n(&samp_gen, __ATOMIC_RELAXED); }
 
@@ -1213,16 +1223,21 @@ failed:
 // blitted into it, which decodes the BC7 blocks without a CPU decoder (Vulkan requires BLIT_SRC for BC formats), then the
 // licensed tiles are copied over the verified replaceable cells only. Every other texel is the native pixel. The images live
 // until shutdown, so copied draw commands may reference them; no native pixel reaches the CPU or any file.
-typedef struct { unsigned width, height, cell_w, cell_h, columns, records; const char *name; } InlineGeom;
+typedef struct { unsigned width, height, cell_w, cell_h, columns, records; const char *name; unsigned format; } InlineGeom;
 static const InlineGeom inline_geoms[INLINE_LAYOUTS] = {
-    {INLINE_ATLAS_W, INLINE_ATLAS_H, INLINE_CELL_W, INLINE_CELL_H, INLINE_COLUMNS, INLINE_RECORDS, "text atlas"},
-    {SHEET_W, SHEET_H, SHEET_CELL, SHEET_CELL, SHEET_COLUMNS, SHEET_RECORDS, "button sheet"},
-    {STICKS_W, STICKS_H, STICKS_CELL, STICKS_CELL, STICKS_COLUMNS, STICKS_RECORDS, "stick-direction image"},
+    {INLINE_ATLAS_W, INLINE_ATLAS_H, INLINE_CELL_W, INLINE_CELL_H, INLINE_COLUMNS, INLINE_RECORDS, "text atlas", INLINE_NVN_FORMAT},
+    {SHEET_W, SHEET_H, SHEET_CELL, SHEET_CELL, SHEET_COLUMNS, SHEET_RECORDS, "button sheet", INLINE_NVN_FORMAT},
+    {STICKS_W, STICKS_H, STICKS_CELL, STICKS_CELL, STICKS_COLUMNS, STICKS_RECORDS, "stick-direction image", INLINE_NVN_FORMAT},
+    {HINT_W, HINT_H, HINT_CELL_W, HINT_CELL_H, 1, HINT_CELLS, "mini-map hint image", HINT_NVN_FORMAT},   // cell slots; the cells are placed by hint_origins
+    {SOUL_W, SOUL_H, SOUL_W, SOUL_H, 1, 1, "soul challenge button image", HINT_NVN_FORMAT},   // one cell: the whole image
+    {HOLD_W, HOLD_H, HOLD_W, HOLD_H, 1, 1, "field action hold button image", INLINE_NVN_FORMAT},   // one cell: the whole image
 };
 // The policy symbol a cell of a layout stands for, and its native glyph box.
-static unsigned inline_cell_symbol(int layout, unsigned k) { return layout == INLINE_LAYOUT_STICKS ? SYM_SLV + k : k % SYM_PER_SHEET; }
+static unsigned inline_cell_symbol(int layout, unsigned k) {
+    return layout == INLINE_LAYOUT_STICKS ? SYM_SLV + k : layout == INLINE_LAYOUT_HINT ? (k ? SYM_CRS : SYM_R) : layout == INLINE_LAYOUT_SOUL ? SYM_B : layout == INLINE_LAYOUT_HOLD ? SYM_A : k % SYM_PER_SHEET;
+}
 static const InlineBox *inline_cell_box(int layout, unsigned k) {
-    return layout == INLINE_LAYOUT_STICKS ? &inline_stick_boxes[k] : layout == INLINE_LAYOUT_SHEET ? &inline_sheet_boxes[k] :
+    return layout == INLINE_LAYOUT_HOLD ? &hold_box : layout == INLINE_LAYOUT_SOUL ? &soul_box : layout == INLINE_LAYOUT_HINT ? &hint_boxes[k] : layout == INLINE_LAYOUT_STICKS ? &inline_stick_boxes[k] : layout == INLINE_LAYOUT_SHEET ? &inline_sheet_boxes[k] :
            &inline_font_boxes[k / SYM_PER_SHEET][k % SYM_PER_SHEET];
 }
 static Tex *inline_image[INLINE_SIGNATURES];
@@ -1241,7 +1256,7 @@ int vk_inline_capture_source(uint64_t handle, uint64_t storage) {
         const tex_t *t = &tslots[id].t;
         const InlineGeom *g = &inline_geoms[layout];
         uint64_t mem = (uint64_t)(uintptr_t)t->mem;
-        if (t->d.width == g->width && t->d.height == g->height && t->d.format == INLINE_NVN_FORMAT && !tslots[id].has_view &&
+        if (t->d.width == g->width && t->d.height == g->height && t->d.format == g->format && !tslots[id].has_view &&
             (storage ? mem == storage : layout != INLINE_LAYOUT_FONT))
             valid = appendage_inline_source(handle, t->serial, mem);
     }
@@ -1265,14 +1280,21 @@ static Tex *inline_upload(unsigned sig, const Tex *native, int layout, const int
         int a = art[sym];
         if (a < 0 || !inline_symbol_replaceable(sym)) continue;
         const InlineBox *box = inline_cell_box(layout, k);
+        const unsigned cw = layout == INLINE_LAYOUT_HINT ? hint_cell_dims[k][0] : g->cell_w, ch = layout == INLINE_LAYOUT_HINT ? hint_cell_dims[k][1] : g->cell_h;
         uint32_t *dst = cells + (size_t)n * g->cell_w * g->cell_h;
-        if (!glyph_art_cell((unsigned)a, (int)g->cell_w, (int)g->cell_h, box->x, box->y, box->w, box->h, dst)) { free(cells); appendage_glyph_note_fallback(); return NULL; }
-        regions[n] = (VkBufferImageCopy){.bufferOffset = (VkDeviceSize)n * cell_bytes, .bufferRowLength = g->cell_w,
-                                         .bufferImageHeight = g->cell_h,
+        // The face buttons of the sheet are discs: a tile with corners (a keyboard key) must stay inside the circle.
+        const int round_cell = layout == INLINE_LAYOUT_SHEET && (sym == SYM_X || sym == SYM_Y || sym == SYM_A || sym == SYM_B);
+        if (!(round_cell ? glyph_art_cell_round : glyph_art_cell)((unsigned)a, (int)cw, (int)ch, box->x, box->y, box->w, box->h, dst)) { free(cells); appendage_glyph_note_fallback(); return NULL; }
+        if (layout == INLINE_LAYOUT_HINT) glyph_art_shadowed(dst, (int)cw, (int)ch);
+        if (layout == INLINE_LAYOUT_HOLD) glyph_art_hold_button(dst, (int)cw, (int)ch);
+        if (layout == INLINE_LAYOUT_SOUL) glyph_art_to_mask(dst, (int)(cw * ch));   // the disc is white and the letter a hole, like the native image
+        regions[n] = (VkBufferImageCopy){.bufferOffset = (VkDeviceSize)n * cell_bytes, .bufferRowLength = cw,
+                                         .bufferImageHeight = ch,
                                          .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                                         .imageOffset = {(int32_t)(k % g->columns) * (int32_t)g->cell_w,
-                                                         (int32_t)(k / g->columns) * (int32_t)g->cell_h, 0},
-                                         .imageExtent = {g->cell_w, g->cell_h, 1}};
+                                         .imageOffset = layout == INLINE_LAYOUT_HINT ? (VkOffset3D){hint_origins[k][0], hint_origins[k][1], 0} :
+                                                        (VkOffset3D){(int32_t)(k % g->columns) * (int32_t)g->cell_w,
+                                                                     (int32_t)(k / g->columns) * (int32_t)g->cell_h, 0},
+                                         .imageExtent = {cw, ch, 1}};
         n++;
     }
     if (!n) { free(cells); return NULL; }
@@ -1330,8 +1352,55 @@ failed:
     return NULL;
 }
 
+// The mini-map hint and the Soul Challenge button are drawn through no bind this build intercepts, so they are recognized where draws
+// resolve their textures: a plain handle whose registered texture has the image's exact size and format and whose texture memory hashes
+// to the pinned image. A texture is judged once per (serial, address); a failed judgement is retried a few times (the memory may not hold
+// the data yet) and logs the actual hash, so a log can say why the native image stayed.
+static const struct { int layout; unsigned width, height, bytes, format; const char *name; uint8_t sha[32]; } plain_kinds[PLAIN_KINDS] = {
+    {INLINE_LAYOUT_HINT, HINT_W, HINT_H, HINT_BYTES, HINT_NVN_FORMAT, "the mini-map hint", HINT_NATIVE_SHA256},
+    {INLINE_LAYOUT_SOUL, SOUL_W, SOUL_H, SOUL_BYTES, HINT_NVN_FORMAT, "the Soul Challenge button", SOUL_NATIVE_SHA256},
+    {INLINE_LAYOUT_HOLD, HOLD_W, HOLD_H, HOLD_BYTES, INLINE_NVN_FORMAT, "the held field-action button", HOLD_NATIVE_SHA256},
+};
+static int plain_verified(int id, int kind) {
+    const tex_t *t = &tslots[id].t;
+    if (t->d.width != plain_kinds[kind].width || t->d.height != plain_kinds[kind].height || t->d.format != plain_kinds[kind].format ||
+        tslots[id].has_view || !t->mem) return 0;
+    static struct { uint64_t serial, mem; int ok; unsigned tries; } cache[PLAIN_KINDS][64];
+    static unsigned next[PLAIN_KINDS], mismatch_logs;
+    uint64_t mem = (uint64_t)(uintptr_t)t->mem;
+    unsigned i;
+    for (i = 0; i < 64; i++) if (cache[kind][i].serial == t->serial && cache[kind][i].mem == mem && cache[kind][i].serial) break;
+    if (i == 64) { i = next[kind]++ % 64; cache[kind][i].serial = t->serial; cache[kind][i].mem = mem; cache[kind][i].ok = 0; cache[kind][i].tries = 0; }
+    if (cache[kind][i].ok > 0 || cache[kind][i].tries >= 3) return cache[kind][i].ok > 0;
+    cache[kind][i].tries++;
+    uint8_t hash[32];
+    if (!plat_mem_readable(mem, plain_kinds[kind].bytes)) return 0;
+    sha256((const void *)(uintptr_t)mem, plain_kinds[kind].bytes, hash);
+    cache[kind][i].ok = !memcmp(hash, plain_kinds[kind].sha, sizeof hash);
+    if (cache[kind][i].ok || mismatch_logs++ < 12)
+        rt_log("inline glyph: a %ux%u image (texture %d) %s %s (content hash %02x%02x%02x%02x%02x%02x%02x%02x, try %u)",
+               plain_kinds[kind].width, plain_kinds[kind].height, id, cache[kind][i].ok ? "is" : "is not", plain_kinds[kind].name,
+               hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], cache[kind][i].tries);
+    if (!cache[kind][i].ok) cache[kind][i].ok = -1;
+    return cache[kind][i].ok > 0;
+}
+
 const VkTexImage *vk_appendage_texture_locked(uint64_t handle, view_t *view, int *has_view) {
     int id = (int)(handle & 0xfffff);
+    if (!(handle >> 32) && id < ntslots && tslots[id].used) {
+        for (int k = 0; k < PLAIN_KINDS; k++) {
+            if (tslots[id].t.d.width != plain_kinds[k].width || tslots[id].t.d.height != plain_kinds[k].height || !plain_verified(id, k)) continue;
+            unsigned sig = appendage_plain_signature(plain_kinds[k].layout);
+            if (sig != plain_last_sig[k] || id != plain_slot[k]) {   // another style (or slot): the draw memos must look this handle up again
+                plain_last_sig[k] = sig;
+                __atomic_store_n(&plain_slot[k], id, __ATOMIC_RELEASE);
+                __atomic_add_fetch(&plain_epoch[k], 1, __ATOMIC_RELEASE);
+                slots_gen++;
+            }
+            if (sig) handle = INLINE_GLYPH_TAG | (uint64_t)sig << 32 | handle;
+            break;
+        }
+    }
     const VkTexImage *original = vk_texture_by_id_locked(id, view, has_view);
     if (appendage_inline_tagged(handle) && original && id < ntslots) {
         const tex_t *t = &tslots[id].t;
@@ -1340,8 +1409,8 @@ const VkTexImage *vk_appendage_texture_locked(uint64_t handle, view_t *view, int
         int layout = 0;
         if (!sig || sig > INLINE_SIGNATURES || !appendage_inline_signature(sig, art, &layout) || layout < 0 || layout >= INLINE_LAYOUTS ||
             t->d.width != inline_geoms[layout].width || t->d.height != inline_geoms[layout].height ||
-            t->d.format != INLINE_NVN_FORMAT || tslots[id].has_view || appendage_glyph_failure("source") ||
-            !appendage_inline_source(handle, t->serial, (uint64_t)(uintptr_t)t->mem)) {
+            t->d.format != inline_geoms[layout].format || tslots[id].has_view || appendage_glyph_failure("source") ||
+            ((layout < INLINE_LAYOUT_HINT) && !appendage_inline_source(handle, t->serial, (uint64_t)(uintptr_t)t->mem))) {   // these images are judged by their content
             appendage_glyph_note_fallback();
             return original;
         }

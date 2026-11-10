@@ -64,21 +64,21 @@ This remains a visible experimental limitation for review; unlimited-session sty
 
 ## Licensed assets and reproduction
 
-Two packs supply the 138 style tiles, each under its own license:
+Two packs supply the 139 style tiles, each under its own license:
 
 - **Audune Prompts 1.3.1** by Audune, [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), <https://audune.itch.io/audune-prompts>: the 58 Xbox and PlayStation tiles (`assets/appendage-glyph/audune/`). Each is one 64x64 cell cut, unscaled, from the pack's "Light" sprite sheet by [tools/make_audune_tiles.py](../tools/make_audune_tiles.py); the D-pad direction tiles have their white and dim arms swapped (Audune draws the pressed direction dim; here it is the bright one), and the four PlayStation *colored* face tiles also have the dark symbol repainted in the symbol color of the pack's "Dark" sheet. The notice with the attribution line and the change statement is [audune/NOTICE.txt](../assets/appendage-glyph/audune/NOTICE.txt); the package, the two sheets and every tile (source cell, change, SHA-256) are in the `audune` block and the `pack: audune` entries of the provenance. The tiles are CC BY-SA 4.0, not MIT. Whether the compiled copy in `runtime/glyph_art.inc` and a binary that embeds it must also be offered under share-alike terms is a project decision that has not been made (see the controls context); the include's header states the license.
-- **Kenney Input Prompts 1.5A**, CC0: the 41 keyboard tiles, the 10 keyboard-cluster composites (nine key groups and the arrow cluster with only left and right lit, drawn for the page-turn circles) (`tools/make_keyboard_clusters.py`) and the 29 Steam tiles (the Audune pack has no Steam set). The original [license](../assets/appendage-glyph/License.txt) and [third-party notice](../THIRD_PARTY_NOTICES.md) accompany them; exact archive member names and per-file SHA-256 values are in [styles/provenance.json](../assets/appendage-glyph/styles/provenance.json). A file-specific Git attribute preserves the upstream license bytes. The older R1 PNG/include/tool remain an attributed reproducibility fixture, not the production multi-style asset path.
+- **Kenney Input Prompts 1.5A**, CC0: the 42 keyboard tiles (letters, digits, mouse, Space, Tab, Ctrl and Shift), the 10 keyboard-cluster composites (nine key groups and the arrow cluster with only left and right lit, drawn for the page-turn circles) (`tools/make_keyboard_clusters.py`) and the 29 Steam tiles (the Audune pack has no Steam set). The original [license](../assets/appendage-glyph/License.txt) and [third-party notice](../THIRD_PARTY_NOTICES.md) accompany them; exact archive member names and per-file SHA-256 values are in [styles/provenance.json](../assets/appendage-glyph/styles/provenance.json). A file-specific Git attribute preserves the upstream license bytes. The older R1 PNG/include/tool remain an attributed reproducibility fixture, not the production multi-style asset path.
 
-No Nintendo resource pixels are distributed. Xbox and PlayStation tiles follow the Audune layout: standard Xbox faces are the pack's Switch-set letters A/B/X/Y, colored Xbox faces its Xbox tiles, PlayStation Start/Back are the pack's generic play and back arrows (its DualShock 4 set has a touchpad instead of Options and Share).
+No Nintendo resource pixels are distributed. Xbox and PlayStation tiles follow the Audune layout: standard Xbox faces are the pack's Switch-set letters A/B/X/Y, colored Xbox faces its Xbox tiles, PlayStation Start/Back are the pack's DualShock 4 Options (three lines) and Share (rays) buttons.
 
 | Artifact | SHA-256 |
 | --- | --- |
 | Original Kenney package | `ac2fcf599080b0f3ba2d174c9474db6df1a0e96ff0662580e2da79a122ab78a1` |
 | Original Audune package | `9b94d0cf744b73f2d43ca328d8ebf6ad14f382ec4d04f1a03543a074db4cf55c` |
 | Kenney license | `ca2f58f80f903512119da5828868199478119818cd7ecffb303d625cb74cbb5a` |
-| Audune notice | `edd6fb443be4dd4b5a01307279eda204ffc2da3f7cb69b3619682bc5d4a903c2` |
-| Styles provenance | `571a6793a9aa4e7c4596ac794a223fd17da5561a465d2759809f1389b6c93ebc` |
-| Production licensed derivative | `2639150ea8e99bb972adcd785631db19d464180b65f9d8707157f918b1c3e8bb` |
+| Audune notice | `8d91c57e0c50cfcecaee561b3b99f1acbb90ea2148ac353a1b06cd0a6b567e9f` |
+| Styles provenance | `6c12efae5a1909f23a55759a84acd0201a96b9f8e8139f2b582b161b2aace79b` |
+| Production licensed derivative | `3f953f7cde1de407e4ed47cb058291ce781189c502cd59824e22c6b4ebf0a098` |
 
 Reproduction needs Python 3.14 with `compression.zstd` and Pillow (verified with Pillow 12.3.0). From the repository root:
 
@@ -91,7 +91,7 @@ python3 tools/make_appendage_glyph.py --out build/glyph-repro/r1.inc
 cmp build/glyph-repro/r1.inc runtime/appendage_r1.inc
 ```
 
-The production include contains 138 individually compressed licensed tiles, totaling 74,229 compressed bytes. The tool verifies source hashes and dimensions before writing the derivative. Reproduction does not read game assets or require a GPU.
+The production include contains 139 individually compressed licensed tiles, totaling 74,836 compressed bytes. The tool verifies source hashes and dimensions before writing the derivative. Reproduction does not read game assets or require a GPU.
 
 ## Build and checks
 

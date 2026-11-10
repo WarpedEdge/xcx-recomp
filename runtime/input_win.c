@@ -222,6 +222,9 @@ void ikb_intent_mouse_take(int32_t *dx, int32_t *dy) {
 }
 
 int ikb_glyph_key(int key) {
+    // The right Shift and Ctrl show the same cap as the left ones (one Shift tile, one Ctrl tile).
+    if (key == KEY_RSHIFT) return KEY_LSHIFT;
+    if (key == KEY_RCTRL) return KEY_LCTRL;
     // Keys whose cap does not change with the layout keep their identity: they have no letter or digit label to look up.
     if (key == KEY_MOUSE_L || key == KEY_MOUSE_R || key == KEY_SPACE || key == KEY_TAB || key == KEY_LSHIFT || key == KEY_LCTRL ||
         key == KEY_UP || key == KEY_DOWN || key == KEY_LEFT || key == KEY_RIGHT) return key;

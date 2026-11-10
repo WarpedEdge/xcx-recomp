@@ -69,5 +69,14 @@ void glyph_decide_inline_set(int preference, int source, int family, int layout,
 void glyph_current_inline_set(int16_t art[GLYPH_INLINE_SET]);
 // Fits a tile into the native glyph box (x, y, w, h) of a cw x ch cell; see glyph_art.c. cell is cw*ch RGBA8.
 int glyph_art_cell(unsigned art, int cw, int ch, int x, int y, int w, int h, uint32_t *cell);
+// Like glyph_art_cell for the box of a round button's disc: a tile with corners (a keyboard key) is fitted so its corners stay inside the circle.
+int glyph_art_cell_round(unsigned art, int cw, int ch, int x, int y, int w, int h, uint32_t *cell);
+// A fitted tile as a mask cell (icon_button03): white texels whose alpha is the tile's alpha times its brightness, so the dark parts of
+// the glyph are cut out like the native white masks; the game tints what is left.
+void glyph_art_to_mask(uint32_t *cell, int count);
+// Gives a cw x ch cell holding a fitted glyph the soft dark shadow the mini-map hint picture draws around its drawings, in place.
+void glyph_art_shadowed(uint32_t *cell, int cw, int ch);
+// Composites a fitted 64x64 glyph over a drawn teal ring and dark teal disc (the field-action button while it is held), in place.
+void glyph_art_hold_button(uint32_t *cell, int cw, int ch);
 // The 46x50 inline-atlas cell.
 int glyph_art_inline_cell(unsigned art, int x, int y, int w, int h, uint32_t *cell);

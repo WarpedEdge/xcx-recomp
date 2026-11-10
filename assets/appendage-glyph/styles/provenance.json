@@ -696,12 +696,12 @@
       "pack": "audune",
       "sheet": "Audune Prompts Light.png",
       "cell": [
-        10,
+        16,
         4
       ],
       "change": "cell cut from the sheet",
       "file": "audune_playstation_start.png",
-      "sha256": "d7da02cf3dee90162f107ce8fc0576600a013d72cbddb8b601a5d859979b96ed"
+      "sha256": "2e946988af9e26a5c478fedcc87922960caa44cd2f3ebf8e550a14a7885cca25"
     },
     {
       "style": "PLAYSTATION",
@@ -709,12 +709,12 @@
       "pack": "audune",
       "sheet": "Audune Prompts Light.png",
       "cell": [
-        10,
+        16,
         5
       ],
       "change": "cell cut from the sheet",
       "file": "audune_playstation_back.png",
-      "sha256": "3cbcc377c6340cf5e49af49c97d0733c8642e0ecb9ceb83e07d9d4e2a1f92843"
+      "sha256": "c52d8e8ce2cd1c268b0325aa0de97a7271969521c67ff2e26397eb438f10c0b1"
     },
     {
       "style": "PLAYSTATION",
@@ -1264,6 +1264,13 @@
       "member": "Steam Deck/Default/steamdeck_stick_r_horizontal.png",
       "sha256": "d499154f910558d5a0b4b10a5aea7590181012afd7600d42d9bebfe72526ebd7",
       "file": "steamdeck_stick_r_horizontal.png"
+    },
+    {
+      "style": "KEYBOARD",
+      "input": "KEY_LSHIFT",
+      "member": "Keyboard & Mouse/Default/keyboard_shift.png",
+      "sha256": "0c63e9e7d1175d72ee559d9a036ab4ee9bf099262b882f60049a499fb24cd247",
+      "file": "keyboard_shift.png"
     },
     {
       "style": "KEYBOARD",

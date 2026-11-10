@@ -253,7 +253,8 @@ static unsigned inline_signature_id(int layout, const int16_t art[GLYPH_SYMBOLS]
             size_t n = strlen(list);
             snprintf(list + n, sizeof list - n, "%s=%s ", symbol_names[i], glyph_art_name((unsigned)art[i]));
         }
-        rt_log("inline glyph: %s signature %u: %s", layout == INLINE_LAYOUT_SHEET ? "sheet" : layout == INLINE_LAYOUT_STICKS ? "stick" : "text", id, list);
+        rt_log("inline glyph: %s signature %u: %s", layout == INLINE_LAYOUT_SHEET ? "sheet" : layout == INLINE_LAYOUT_STICKS ? "stick" :
+               layout == INLINE_LAYOUT_HINT ? "mini-map hint" : layout == INLINE_LAYOUT_SOUL ? "soul challenge button" : layout == INLINE_LAYOUT_HOLD ? "field action hold button" : "text", id, list);
     }
     if (full) rt_log("inline glyph: %u signatures in use; further style or binding combinations keep the native icons", INLINE_SIGNATURES);
     return id;
@@ -264,10 +265,17 @@ static int layout_symbols(int layout, int16_t art[GLYPH_SYMBOLS]) {
     glyph_current_symbol_set(art);
     int any = 0;
     for (int i = 0; i < GLYPH_SYMBOLS; i++) {
-        int mine = layout == INLINE_LAYOUT_STICKS ? i >= SYM_PER_SHEET : i < SYM_PER_SHEET;
+        int mine = layout == INLINE_LAYOUT_STICKS ? i >= SYM_PER_SHEET : layout == INLINE_LAYOUT_HINT ? i == SYM_R || i == SYM_CRS || i == SYM_CRSD : layout == INLINE_LAYOUT_SOUL ? i == SYM_B : layout == INLINE_LAYOUT_HOLD ? i == SYM_A : i < SYM_PER_SHEET;
         if (!mine || !inline_symbol_replaceable((unsigned)i)) art[i] = -1;
         any |= art[i] >= 0;
     }
+    // The mini-map hint draws the D-pad with its down button lit: a pad style shows its lit-down D-pad tile in the D-pad cell; the
+    // keyboard keeps the 1-4 cluster (the hint does not mean the down key).
+    if (layout == INLINE_LAYOUT_HINT && art[SYM_CRSD] >= 0) {
+        const char *name = glyph_art_name((unsigned)art[SYM_CRSD]);
+        if (strncmp(name, "keyboard_", 9) && strncmp(name, "mouse_", 6)) art[SYM_CRS] = art[SYM_CRSD];
+    }
+    if (layout == INLINE_LAYOUT_HINT) { art[SYM_CRSD] = -1; any = art[SYM_R] >= 0 || art[SYM_CRS] >= 0; }
     // The page-turn circles (left and right chevrons around a right-stick cell) draw the arrow keys with only left and right lit.
     if (layout == INLINE_LAYOUT_SHEET && art[SYM_ANAR] >= 0 && art[SYM_ANAR] == glyph_art_find(GLYPH_KEYBOARD, GLYPH_IN_KB_ARROWS)) {
         int lit = glyph_art_find(GLYPH_KEYBOARD, GLYPH_IN_KB_ARROWS_LIT_H);
@@ -302,18 +310,19 @@ static void inline_arm(Cpu *c) {
 // its record table matches the closed form's SHA-256. A pane shows one cell of them (its selector, +0x34c, is the record index).
 // A resource is verified once per distinct address and content, then trusted only while its first 128 bytes stay equal.
 typedef struct { int layout; unsigned records; uint8_t guard[32], table[32]; uint64_t checked; uint8_t copy[128]; } SheetKind;
-static SheetKind sheet_kinds[2] = {
+enum { SHEET_KINDS = 2 };
+static SheetKind sheet_kinds[SHEET_KINDS] = {
     {INLINE_LAYOUT_SHEET, SHEET_RECORDS, {0xed,0x91,0x64,0xc1,0x3b,0xf5,0x5b,0x99,0x9b,0xf7,0x8b,0xe9,0xd5,0x2d,0x3b,0x65,
         0x71,0x70,0x62,0xc6,0x22,0xdb,0xc8,0xb1,0x31,0x5a,0x30,0xe7,0xd9,0x7d,0x32,0xf7}, SHEET_RECORDS_SHA256},
     {INLINE_LAYOUT_STICKS, STICKS_RECORDS, STICKS_GUARD_SHA256, STICKS_RECORDS_SHA256},
 };
 static SheetKind *sheet_resource(uint64_t resource) {
     if (!resource || !plat_mem_readable(resource, 0x1000)) return NULL;
-    for (unsigned k = 0; k < 2; k++)
+    for (unsigned k = 0; k < SHEET_KINDS; k++)
         if (sheet_kinds[k].checked == resource && !memcmp(sheet_kinds[k].copy, (void *)(uintptr_t)resource, sizeof sheet_kinds[k].copy)) return &sheet_kinds[k];
     uint8_t hash[32];
     sha256((void *)(uintptr_t)resource, 128, hash);
-    for (unsigned k = 0; k < 2; k++) {
+    for (unsigned k = 0; k < SHEET_KINDS; k++) {
         SheetKind *kind = &sheet_kinds[k];
         if (memcmp(hash, kind->guard, 32)) continue;
         uint32_t base = rd32(resource + 0x2c);
@@ -358,7 +367,8 @@ static void sheet_arm(Cpu *c, uint64_t node) {
     if (first) sheet_seen[sheet_seen_count++] = pair;
     plat_mutex_unlock(&glyph_lock);
     if (first) rt_log("inline glyph: a layout pane draws the %s (selector %u of %u frames); using the signature's composite",
-                      kind->layout == INLINE_LAYOUT_STICKS ? "stick-direction image" : "button sheet", rd16(node + 0x34c), rd16(node + 0x34e));
+                      kind->layout == INLINE_LAYOUT_STICKS ? "stick-direction image" : "button sheet",
+                      rd16(node + 0x34c), rd16(node + 0x34e));
     inline_scope = (InlineScope){c, id, 0, tid};
 }
 // The two f_7000a322cc binds of the icon source (node+0x3b8). Argument meanings, checked against the pinned main by
@@ -576,7 +586,7 @@ uint64_t appendage_glyph_handle(const Cpu *c, uint64_t original) {
         return vk_inline_capture_source(tagged, inline_scope.storage) ? tagged : original;
     }
     if (scope.cpu != c || !scope.generation || c->x[30] != MOD_MAIN_BASE + 0x95c9cc ||
-        original >> 32 || (original & 0xfffff) != scope.tid) return original;
+        original >> 32 || (original & 0xfffff) != scope.tid || scope.art >= GLYPH_ART_MAX) return original;   // the handle names its art in 7 bits
     uint64_t tagged = APPENDAGE_GLYPH_TAG | (uint64_t)scope.generation << 44 | (uint64_t)scope.art << 32 | original;
     return vk_appendage_capture_source(tagged) ? tagged : original;
 }
@@ -595,6 +605,16 @@ int appendage_glyph_source(uint64_t h, uint64_t serial, uint64_t storage) {
     }
     plat_mutex_unlock(&glyph_lock);
     return valid;
+}
+
+// The mini-map hint and the Soul Challenge button are single images the texture layer recognizes by their content; only the style
+// decides what they show.
+unsigned appendage_plain_signature(int layout) {
+    plat_once(&once, init, NULL);
+    if (!inline_enabled || glyph_style_parse(cfg_value("XCX_GLYPH_STYLE")) == GLYPH_ORIGINAL) return 0;
+    int16_t art[GLYPH_SYMBOLS];
+    if (!layout_symbols(layout, art)) return 0;
+    return inline_signature_id(layout, art);
 }
 
 int appendage_inline_signature(unsigned id, int16_t art[GLYPH_SYMBOLS], int *layout) {

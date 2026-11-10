@@ -42,8 +42,9 @@ def block(face_row, trig_row, stick_row, dpad_row):
 
 CELLS = {
     'XBOX': dict(block(13, 13, 14, 16), PAD_START=(13, 4), PAD_BACK=(13, 5)),
-    # The DualShock 4 tiles have a touchpad where Options and Share would be: the generic pad's play and back arrows stand in.
-    'PLAYSTATION': dict(block(16, 16, 17, 19), PAD_START=(10, 4), PAD_BACK=(10, 5)),
+    # Row 16 of the Light sheet holds the DualShock 4's Options (three lines, column 4) and Share (rays, column 5) buttons
+    # next to the face buttons; they stand for + and - (the Nintendo plus and minus sit where Options and Share sit).
+    'PLAYSTATION': dict(block(16, 16, 17, 19), PAD_START=(16, 4), PAD_BACK=(16, 5)),
 }
 # The face buttons: (standard, colored) cells for south, east, west, north.
 FACES = {
