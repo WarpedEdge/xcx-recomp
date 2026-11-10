@@ -9,7 +9,8 @@ Used members:  "Audune Prompts Light.png" and "Audune Prompts Dark.png" (768x140
                each sheet and, for every tile here, its source cell, are in ../styles/provenance.json.
 
 Changes made to the original (CC BY-SA 4.0 section 3(a)(1)(B)):
-  * Each tile is a single 64x64 cell cut out of the "Light" sheet, without scaling.
+  * Each tile is a single 64x64 cell cut out of the "Light" sheet, without scaling. The PlayStation + and - tiles
+    (audune_playstation_start.png and audune_playstation_back.png) are the sheet's DualShock 4 Options and Share cells.
   * The D-pad tiles that name directions (up, down, left, right, up and down, left and right) have the white and the dim arms
     exchanged, so the pressed directions are the bright ones; Audune draws them dim.
   * The four PlayStation "colored" face tiles (audune_playstation_*_colored.png) have the dark symbol of the Light-sheet tile
