@@ -236,7 +236,9 @@ void ikb_intent_mouse_take(int32_t *dx, int32_t *dy) {
 }
 
 int ikb_glyph_key(int key) {
-    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R || key == KEY_SPACE) return key;
+    // Keys whose cap does not change with the layout keep their identity: they have no letter or digit label to look up.
+    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R || key == KEY_SPACE || key == KEY_TAB || key == KEY_LSHIFT || key == KEY_LCTRL ||
+        key == KEY_UP || key == KEY_DOWN || key == KEY_LEFT || key == KEY_RIGHT) return key;
     SDL_Scancode sc = key_sc(key);
     if (sc == SDL_SCANCODE_UNKNOWN) return KEY_NONE;
     SDL_Keycode label = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);

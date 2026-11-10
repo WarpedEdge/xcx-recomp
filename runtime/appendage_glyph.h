@@ -1,6 +1,7 @@
 // Experimental, build-specific HUD glyph styles. No input or guest-state writes.
 #pragma once
 #include "cpu.h"
+#include "input_glyphs.h"
 
 // Bits 32..38 select immutable artwork; bits 39..43 remain reserved.
 #define APPENDAGE_GLYPH_TAG 0xa700000000000000ull
@@ -25,10 +26,13 @@ uint64_t appendage_glyph_handle(const Cpu *c, uint64_t original);
 // Called with the texture lock held; copies serial/storage identity, never a guest pointer.
 int appendage_glyph_source(uint64_t h, uint64_t serial, uint64_t storage);
 int vk_appendage_capture_source(uint64_t handle);
-// Inline atlas: the art choice (art id per virtual button A, B, X, Y, L, R, ZL, ZR; -1 keeps the native cell) of a
-// signature, and its source identity. Both copy scalars under the module lock; the texture lock may be held.
-int appendage_inline_signature(unsigned id, int8_t art[8]);
+// Inline atlas and icon_button sheet: the art choice of a signature (an art id per symbol, -1 keeps the native cell) and the
+// layout it applies to (INLINE_LAYOUT_*), and its source identity. Both copy scalars under the module lock; the texture lock may
+// be held.
+enum { INLINE_LAYOUT_FONT, INLINE_LAYOUT_SHEET, INLINE_LAYOUT_STICKS, INLINE_LAYOUTS };
+int appendage_inline_signature(unsigned id, int16_t art[GLYPH_SYMBOLS], int *layout);
 int appendage_inline_source(uint64_t h, uint64_t serial, uint64_t storage);
+// storage 0 (the icon_button sheet has no guest storage pointer of its own) takes the registered texture's own address.
 int vk_inline_capture_source(uint64_t handle, uint64_t storage);
 // Read-only, opt-in diagnostic at the verified original BindTexture import.
 void vk_glyph_resource_observe(uint64_t handle, unsigned event);

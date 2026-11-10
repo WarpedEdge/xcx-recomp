@@ -35,12 +35,14 @@ int glyph_art_pixels(unsigned art, uint32_t *pixels) {
     return 1;
 }
 
-// Fits one licensed tile into the native glyph box (x, y, w, h) of a 46x50 inline-icon cell: the tile is cropped to its
+// Fits one licensed tile into the native glyph box (x, y, w, h) of a cw x ch icon cell (46x50 in the inline atlas, 64x64 in the
+// icon_button sheet): the tile is cropped to its
 // visible area, scaled to fit the box with its aspect kept, centred in it and area-resampled in premultiplied alpha so
-// edges stay clean. Everything outside the fitted art is transparent. cell is the whole 46x50 RGBA8 cell.
-int glyph_art_inline_cell(unsigned art, int x, int y, int w, int h, uint32_t *cell) {
-    enum { CW = 46, CH = 50, T = 64 };
-    if (art >= glyph_art_count() || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > CW || y + h > CH) return 0;
+// edges stay clean. Everything outside the fitted art is transparent. cell is the whole cw x ch RGBA8 cell.
+int glyph_art_inline_cell(unsigned art, int x, int y, int w, int h, uint32_t *cell) { return glyph_art_cell(art, 46, 50, x, y, w, h, cell); }
+int glyph_art_cell(unsigned art, int CW, int CH, int x, int y, int w, int h, uint32_t *cell) {
+    enum { T = 64 };
+    if (art >= glyph_art_count() || CW <= 0 || CH <= 0 || CW > 128 || CH > 128 || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > CW || y + h > CH) return 0;
     uint32_t tile[T * T];
     const typeof(glyph_arts[0]) *a = &glyph_arts[art];
     size_t n = ZSTD_decompress(tile, sizeof tile, glyph_art_bytes + a->offset, a->length);

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "appendage_glyph.h"
+#include "cfg.h"
 #include "host.h"
 #include "input.h"
 #include "input_map.h"
@@ -64,8 +65,8 @@ static uint64_t icon_sources[ICON_SOURCES];
 // Inline text-icon atlas replacement. A signature is the art chosen for each virtual button (A, B, X, Y, L, R, ZL, ZR; -1 keeps
 // that button's native cells). Signatures are never recycled: copied draw commands carry the handle's signature id until
 // they execute. The table is bounded; once full, new combinations keep the native atlas.
-typedef struct { int8_t art[INLINE_ACTIONS]; uint64_t serial, storage; } InlineSignature;
-typedef struct { const Cpu *cpu; unsigned id; uint64_t storage; } InlineScope;
+typedef struct { int layout; int16_t art[GLYPH_SYMBOLS]; uint64_t serial, storage; } InlineSignature;
+typedef struct { const Cpu *cpu; unsigned id; uint64_t storage; uint32_t tid; } InlineScope;   // tid: sheet only, the texture id the bind must name
 static InlineSignature inline_sigs[INLINE_SIGNATURES];
 static unsigned inline_sig_count, inline_full_logged, inline_source_logged, inline_entry_logged;
 static int inline_enabled = 1;
@@ -231,38 +232,55 @@ static int inline_source_ok(uint64_t src, IconLookup *lk) {
     return !memcmp(hash, expected, sizeof hash);
 }
 
-static unsigned inline_signature_id(const int8_t art[INLINE_ACTIONS]) {
+static const char *const symbol_names[GLYPH_SYMBOLS] = {"crs","pow","hom","mns","pls","x","y","a","b","analp","anarp","anal","anar",
+                                                         "l","r","zl","zr","crsu","crsd","crsl","crsr","crsud","crslr","cap","stick-l-v","stick-l-h","stick-r-v","stick-r-h"};
+static unsigned inline_signature_id(int layout, const int16_t art[GLYPH_SYMBOLS]) {
     unsigned id = 0, created = 0;
     plat_mutex_lock(&glyph_lock);
     for (unsigned i = 0; i < inline_sig_count && !id; i++)
-        if (!memcmp(inline_sigs[i].art, art, INLINE_ACTIONS)) id = i + 1;
+        if (inline_sigs[i].layout == layout && !memcmp(inline_sigs[i].art, art, sizeof inline_sigs[i].art)) id = i + 1;
     if (!id && inline_sig_count < INLINE_SIGNATURES) {
-        memcpy(inline_sigs[inline_sig_count].art, art, INLINE_ACTIONS);
+        inline_sigs[inline_sig_count].layout = layout;
+        memcpy(inline_sigs[inline_sig_count].art, art, sizeof inline_sigs[0].art);
         id = ++inline_sig_count; created = 1;
     }
     int full = !id && !inline_full_logged++;
     plat_mutex_unlock(&glyph_lock);
     if (created) {
-        char list[INLINE_ACTIONS * 32 + 1] = ""; static const char *const names[INLINE_ACTIONS] = {"A","B","X","Y","L","R","ZL","ZR"};
-        for (int i = 0; i < INLINE_ACTIONS; i++) {
+        char list[GLYPH_SYMBOLS * 40 + 1] = "";
+        for (int i = 0; i < GLYPH_SYMBOLS; i++) {
+            if (art[i] < 0) continue;
             size_t n = strlen(list);
-            snprintf(list + n, sizeof list - n, "%s=%s ", names[i], art[i] >= 0 ? glyph_art_name((unsigned)art[i]) : "native");
+            snprintf(list + n, sizeof list - n, "%s=%s ", symbol_names[i], glyph_art_name((unsigned)art[i]));
         }
-        rt_log("inline glyph: signature %u: %s", id, list);
+        rt_log("inline glyph: %s signature %u: %s", layout == INLINE_LAYOUT_SHEET ? "sheet" : layout == INLINE_LAYOUT_STICKS ? "stick" : "text", id, list);
     }
     if (full) rt_log("inline glyph: %u signatures in use; further style or binding combinations keep the native icons", INLINE_SIGNATURES);
     return id;
 }
-
+// The replaceable symbols the current style would draw for one layout, as a set (symbols of other layouts are masked out so an
+// unrelated binding change does not mint a new signature); returns whether any symbol of this layout is replaced.
+static int layout_symbols(int layout, int16_t art[GLYPH_SYMBOLS]) {
+    glyph_current_symbol_set(art);
+    int any = 0;
+    for (int i = 0; i < GLYPH_SYMBOLS; i++) {
+        int mine = layout == INLINE_LAYOUT_STICKS ? i >= SYM_PER_SHEET : i < SYM_PER_SHEET;
+        if (!mine || !inline_symbol_replaceable((unsigned)i)) art[i] = -1;
+        any |= art[i] >= 0;
+    }
+    // The page-turn circles (left and right chevrons around a right-stick cell) draw the arrow keys with only left and right lit.
+    if (layout == INLINE_LAYOUT_SHEET && art[SYM_ANAR] >= 0 && art[SYM_ANAR] == glyph_art_find(GLYPH_KEYBOARD, GLYPH_IN_KB_ARROWS)) {
+        int lit = glyph_art_find(GLYPH_KEYBOARD, GLYPH_IN_KB_ARROWS_LIT_H);
+        if (lit >= 0) art[SYM_ANAR] = (int16_t)lit;
+    }
+    return any;
+}
 // At the icon-source binds (the same two sites as the probe, whose register meanings are in the notes there): when the
-// current style replaces at least one button and the node's source and entry 0 are the verified inline atlas, the next
+// current style replaces at least one symbol and the node's source and entry 0 are the verified inline atlas, the next
 // BindTexture import inside this call may name a replacement. Nothing is written to the guest or the native atlas.
 static void inline_arm(Cpu *c) {
-    int8_t art[INLINE_ACTIONS];
-    glyph_current_inline_set(art);
-    int any = 0;
-    for (int i = 0; i < INLINE_ACTIONS; i++) any |= art[i] >= 0;
-    if (!any) return;
+    int16_t art[GLYPH_SYMBOLS];
+    if (!layout_symbols(INLINE_LAYOUT_FONT, art)) return;
     uint64_t node = c->x[19], entry = c->x[1];
     if (!plat_mem_readable(node, 0x3c0)) return;
     uint64_t src = rd64(node + 0x3b8);
@@ -276,10 +294,73 @@ static void inline_arm(Cpu *c) {
         if (!inline_entry_logged++) rt_log("inline glyph: the bound texture entry is not entry 0 of the verified source; native icons kept");
         return;
     }
-    unsigned id = inline_signature_id(art);
-    if (id) inline_scope = (InlineScope){c, id, rd64(entry + 0x20)};
+    unsigned id = inline_signature_id(INLINE_LAYOUT_FONT, art);
+    if (id) inline_scope = (InlineScope){c, id, rd64(entry + 0x20), 0};
 }
-
+// The icon_button sheet and the stick-direction image: every image pane drawn from them goes through the type-1 bind (the loop at
+// 0xa275c0 binds table[frame] once per layer). A pane is one of them when its resource object matches that image's guard hash and
+// its record table matches the closed form's SHA-256. A pane shows one cell of them (its selector, +0x34c, is the record index).
+// A resource is verified once per distinct address and content, then trusted only while its first 128 bytes stay equal.
+typedef struct { int layout; unsigned records; uint8_t guard[32], table[32]; uint64_t checked; uint8_t copy[128]; } SheetKind;
+static SheetKind sheet_kinds[2] = {
+    {INLINE_LAYOUT_SHEET, SHEET_RECORDS, {0xed,0x91,0x64,0xc1,0x3b,0xf5,0x5b,0x99,0x9b,0xf7,0x8b,0xe9,0xd5,0x2d,0x3b,0x65,
+        0x71,0x70,0x62,0xc6,0x22,0xdb,0xc8,0xb1,0x31,0x5a,0x30,0xe7,0xd9,0x7d,0x32,0xf7}, SHEET_RECORDS_SHA256},
+    {INLINE_LAYOUT_STICKS, STICKS_RECORDS, STICKS_GUARD_SHA256, STICKS_RECORDS_SHA256},
+};
+static SheetKind *sheet_resource(uint64_t resource) {
+    if (!resource || !plat_mem_readable(resource, 0x1000)) return NULL;
+    for (unsigned k = 0; k < 2; k++)
+        if (sheet_kinds[k].checked == resource && !memcmp(sheet_kinds[k].copy, (void *)(uintptr_t)resource, sizeof sheet_kinds[k].copy)) return &sheet_kinds[k];
+    uint8_t hash[32];
+    sha256((void *)(uintptr_t)resource, 128, hash);
+    for (unsigned k = 0; k < 2; k++) {
+        SheetKind *kind = &sheet_kinds[k];
+        if (memcmp(hash, kind->guard, 32)) continue;
+        uint32_t base = rd32(resource + 0x2c);
+        if (base > 0x1000 - 0x1c) return NULL;
+        uint32_t relative = rd32(resource + base + 0x18);
+        if (relative > 0x1000 - base) return NULL;
+        base += relative;
+        if (base > 0x1000 - kind->records * INLINE_RECORD_BYTES) return NULL;
+        sha256((void *)(uintptr_t)(resource + base), kind->records * INLINE_RECORD_BYTES, hash);
+        if (memcmp(hash, kind->table, 32)) return NULL;
+        memcpy(kind->copy, (void *)(uintptr_t)resource, sizeof kind->copy);
+        kind->checked = resource;
+        return kind;
+    }
+    return NULL;
+}
+// Evidence only: the distinct (selector, frame count) pairs of panes seen drawing the sheet, so a log shows which panes were reached.
+enum { SHEET_SEEN = 48 };
+static uint64_t sheet_seen[SHEET_SEEN]; static unsigned sheet_seen_count;
+static void sheet_arm(Cpu *c, uint64_t node) {
+    // Hundreds of image panes bind per frame: with Original selected (the default) nothing below runs.
+    if (!inline_enabled || glyph_style_parse(cfg_value("XCX_GLYPH_STYLE")) == GLYPH_ORIGINAL) return;
+    if (!plat_mem_readable(node, 0x350) || rd64(node) != MOD_MAIN_BASE + 0x1c94318 || *(uint8_t *)(uintptr_t)(node + 0x18) != 1) return;
+    const SheetKind *kind = sheet_resource(rd64(node + 0xe0));
+    if (!kind) return;
+    // Every pane drawn from a verified image may use the composite: it holds all replaced cells at once and the native pixels
+    // everywhere else, so which cell this pane shows (selector +0x34c) need not be known to be right.
+    int16_t art[GLYPH_SYMBOLS];
+    if (!layout_symbols(kind->layout, art)) return;
+    uint64_t table = rd64(node + 0x330);
+    if (!table || !plat_mem_readable(table, 8)) return;
+    uint64_t object = rd64(table);
+    if (!object || !plat_mem_readable(object, 0x38)) return;
+    uint32_t tid = rd32(rd64(MOD_MAIN_BASE + 0x1d64f18)) + rd32(object + 0x34);
+    unsigned id = inline_signature_id(kind->layout, art);
+    if (!id) return;
+    uint64_t pair = (uint64_t)kind->layout << 40 | (uint64_t)rd16(node + 0x34c) << 20 | rd16(node + 0x34e);
+    plat_mutex_lock(&glyph_lock);
+    unsigned seen = 0;
+    for (unsigned i = 0; i < sheet_seen_count; i++) seen |= sheet_seen[i] == pair;
+    int first = !seen && sheet_seen_count < SHEET_SEEN;
+    if (first) sheet_seen[sheet_seen_count++] = pair;
+    plat_mutex_unlock(&glyph_lock);
+    if (first) rt_log("inline glyph: a layout pane draws the %s (selector %u of %u frames); using the signature's composite",
+                      kind->layout == INLINE_LAYOUT_STICKS ? "stick-direction image" : "button sheet", rd16(node + 0x34c), rd16(node + 0x34e));
+    inline_scope = (InlineScope){c, id, 0, tid};
+}
 // The two f_7000a322cc binds of the icon source (node+0x3b8). Argument meanings, checked against the pinned main by
 // verify_sites.py: x0 render context, x1 entry 0 of the source's texture set (*(*(source+0x40)+0x30), 0x78-byte entries),
 // x2 slot byte node+0xf2, x3 zero; x19 still holds the text node. Comparing x1 with an entry recomputed from c->x[19]
@@ -433,7 +514,9 @@ void appendage_glyph_lookup_attach(const Cpu *c, uint64_t frame) {
 void appendage_glyph_bind(Cpu *c, uint64_t node, GuestFn original) {
     BindScope saved = scope;
     ProbeScope saved_probe = probe_scope;
+    InlineScope saved_inline = inline_scope;
     scope = (BindScope){0};
+    inline_scope = (InlineScope){0};
     plat_once(&once, init, NULL);
     probe_scope = probe_bind(c,node);
     unsigned selected = 0; int slot = -1;
@@ -473,9 +556,12 @@ void appendage_glyph_bind(Cpu *c, uint64_t node, GuestFn original) {
         }
         plat_mutex_unlock(&glyph_lock);
     }
+    // A pane drawn from the icon_button sheet that no verified HUD guide owns: its selected cell may be replaced by signature.
+    if (!selected && enabled) sheet_arm(c, node);
     original(c);
     scope = saved;
     probe_scope = saved_probe;
+    inline_scope = saved_inline;
 }
 
 uint64_t appendage_glyph_handle(const Cpu *c, uint64_t original) {
@@ -483,7 +569,8 @@ uint64_t appendage_glyph_handle(const Cpu *c, uint64_t original) {
         unsigned event=probe_scope.event; probe_scope.event=0;
         if (kern_now_ns()<probe_scope.deadline) vk_glyph_resource_observe(original,event);
     }
-    if (inline_scope.cpu == c && inline_scope.id && c->x[30] == MOD_MAIN_BASE + 0x95c9cc && !(original >> 32)) {
+    if (inline_scope.cpu == c && inline_scope.id && c->x[30] == MOD_MAIN_BASE + 0x95c9cc && !(original >> 32) &&
+        (!inline_scope.tid || (original & 0xfffff) == inline_scope.tid)) {
         uint64_t tagged = INLINE_GLYPH_TAG | (uint64_t)inline_scope.id << 32 | original;
         inline_scope.id = 0;   // one handle per bind: later imports in this call keep their own
         return vk_inline_capture_source(tagged, inline_scope.storage) ? tagged : original;
@@ -510,10 +597,10 @@ int appendage_glyph_source(uint64_t h, uint64_t serial, uint64_t storage) {
     return valid;
 }
 
-int appendage_inline_signature(unsigned id, int8_t art[INLINE_ACTIONS]) {
+int appendage_inline_signature(unsigned id, int16_t art[GLYPH_SYMBOLS], int *layout) {
     int ok = 0;
     plat_mutex_lock(&glyph_lock);
-    if (id && id <= inline_sig_count) { memcpy(art, inline_sigs[id - 1].art, INLINE_ACTIONS); ok = 1; }
+    if (id && id <= inline_sig_count) { memcpy(art, inline_sigs[id - 1].art, sizeof inline_sigs[0].art); *layout = inline_sigs[id - 1].layout; ok = 1; }
     plat_mutex_unlock(&glyph_lock);
     return ok;
 }

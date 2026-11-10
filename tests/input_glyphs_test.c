@@ -90,13 +90,13 @@ int main(void){
   for(int physical=PAD_SOUTH;physical<=PAD_NORTH;physical++) {
    int standard=glyph_art_find(style,physical), colored=glyph_art_variant(standard,GLYPH_COLORED);
    CHECK(colored>=63 && colored<75);CHECK(colored!=standard);CHECK(glyph_art_variant(standard,GLYPH_STANDARD)==standard);
-   CHECK(strstr(glyph_art_name(colored),"color_"));
+   CHECK(strstr(glyph_art_name(colored),"color"));
   }
   CHECK(glyph_art_variant(glyph_art_find(style,PAD_R),GLYPH_COLORED)==glyph_art_find(style,PAD_R));
  }
  pref="playstation";variant="colored";d=glyph_current_decision();
- CHECK(d.art[0]==glyph_art_find(GLYPH_PLAYSTATION,PAD_R));CHECK(strstr(glyph_art_name(d.art[1]),"color_"));
- CHECK(strstr(glyph_art_name(glyph_current_button(B_X).art[0]),"color_square"));
+ CHECK(d.art[0]==glyph_art_find(GLYPH_PLAYSTATION,PAD_R));CHECK(strstr(glyph_art_name(d.art[1]),"color"));
+ CHECK(strstr(glyph_art_name(glyph_current_button(B_X).art[0]),"playstation_west_colored"));
  pref="auto";CHECK(glyph_current_button(B_X).art[0]==glyph_art_find(GLYPH_KEYBOARD,KEY_SPACE));
  pref="original";CHECK(glyph_current_button(B_X).art[0]==-1);CHECK(strstr(glyph_status(),"Original"));
  pref="auto";variant="standard";

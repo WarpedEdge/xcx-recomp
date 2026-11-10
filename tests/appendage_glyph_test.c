@@ -1,7 +1,9 @@
 // Synthetic guest nodes exercise production policy/binding scope without guest code or game artwork.
+#define _GNU_SOURCE   // process_vm_readv: the memory probe below
 #include <assert.h>
 #include <stdarg.h>
 #include <sys/mman.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #include "../runtime/appendage_glyph.c"
 #include "inline_atlas_fixture.h"
@@ -47,13 +49,32 @@ void rt_log(const char *fmt, ...) {
 void plat_once(PlatOnce *o, void (*fn)(void *), void *p) { if (!o->state) { o->state = 1; fn(p); } }
 void plat_mutex_lock(PlatMutex *m) { (void)m; }
 void plat_mutex_unlock(PlatMutex *m) { (void)m; }
-int plat_mem_readable(uint64_t a, uint64_t n) { return a > 4096 && n <= 4096; }
+// A real probe, like the runtime's: a protected or unmapped page is not readable, so a test that retires a node and removes its
+// page proves that nothing dereferences it afterwards.
+int plat_mem_readable(uint64_t a, uint64_t n) {
+    if (a <= 4096 || n > 4096) return 0;
+    static uint8_t scratch[4096];
+    struct iovec local = {scratch, n}, remote = {(void *)(uintptr_t)a, n};
+    return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;
+}
 uint64_t kern_now_ns(void) { return ticks; }
 void input_glyph_snapshot(int *s, int *f, int *l, InputMap *m) { *s=source; *f=family; *l=pad_layout; *m=mapping; }
 void sha256(const void *p, size_t n, uint8_t h[32]) {
     if (n == INLINE_RECORDS * INLINE_RECORD_BYTES) {   // Equal to the closed form: the constant; anything else: not it.
         uint8_t want[INLINE_RECORDS * INLINE_RECORD_BYTES]; inline_atlas_records(want);
         static const uint8_t good[32] = INLINE_RECORDS_SHA256;
+        if (!memcmp(p, want, n)) memcpy(h, good, 32); else memset(h, 0x5a, 32);
+        return;
+    }
+    if (n == SHEET_RECORDS * INLINE_RECORD_BYTES) {   // The closed-form sheet table: the constant; anything else: not it.
+        uint8_t want[SHEET_RECORDS * INLINE_RECORD_BYTES]; inline_sheet_records(want);
+        static const uint8_t good[32] = SHEET_RECORDS_SHA256;
+        if (!memcmp(p, want, n)) memcpy(h, good, 32); else memset(h, 0x5a, 32);
+        return;
+    }
+    if (n == STICKS_RECORDS * INLINE_RECORD_BYTES) {   // The closed-form stick-direction table: the constant; anything else: not it.
+        uint8_t want[STICKS_RECORDS * INLINE_RECORD_BYTES]; inline_sticks_records(want);
+        static const uint8_t good[32] = STICKS_RECORDS_SHA256;
         if (!memcmp(p, want, n)) memcpy(h, good, 32); else memset(h, 0x5a, 32);
         return;
     }
@@ -292,7 +313,7 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(argv[1],"inline")) {
         // ---- policy: the eight inline actions, translated through the layout and current bindings
-        int8_t art[GLYPH_INLINE_SET], other[GLYPH_INLINE_SET];
+        int16_t art[GLYPH_INLINE_SET], other[GLYPH_INLINE_SET];
         input_map_reset(); mapping=input_map; source=GLYPH_SOURCE_PAD; family=GLYPH_PAD_PS; pad_layout=PAD_LAYOUT_XBOX;
         glyph_decide_inline_set(GLYPH_PLAYSTATION,source,family,pad_layout,&mapping,GLYPH_STANDARD,art);
         for (int i=0;i<GLYPH_INLINE_SET;i++) assert(art[i]>=0);
@@ -321,20 +342,28 @@ int main(int argc, char **argv) {
           glyph_decide_inline_set(GLYPH_PLAYSTATION,source,family,pad_layout,&unbound,GLYPH_STANDARD,other);
           assert(other[6]==-1&&other[7]==art[7]&&other[0]==art[0]); }
 
-        // ---- tile fitting: art stays inside the native glyph box, centred, never outside it
-        { static uint32_t cell[INLINE_CELL_W*INLINE_CELL_H];
-          for (unsigned k=0;k<INLINE_CELLS;k++) for (unsigned a=0;a<glyph_art_count();a++) {
-              const InlineCell *ic=&inline_cells_geom[k];
-              assert(glyph_art_inline_cell(a,ic->x,ic->y,ic->w,ic->h,cell));
-              int x0=INLINE_CELL_W,y0=INLINE_CELL_H,x1=-1,y1=-1; unsigned opaque=0;
-              for (int y=0;y<INLINE_CELL_H;y++) for (int x=0;x<INLINE_CELL_W;x++) if (cell[y*INLINE_CELL_W+x]>>24) {
-                  opaque++; if (x<x0) x0=x; if (x>x1) x1=x; if (y<y0) y0=y; if (y>y1) y1=y; }
-              assert(opaque>20&&x0>=ic->x&&y0>=ic->y&&x1<ic->x+ic->w&&y1<ic->y+ic->h);       // inside the native box
-              assert(x1-x0+1>=ic->w*6/10||y1-y0+1>=ic->h*6/10);                             // and not tiny
-              assert(2*x0+(x1-x0)>=2*ic->x+ic->w-3&&2*x0+(x1-x0)<=2*ic->x+ic->w+3);          // centred horizontally
+        // ---- tile fitting: art stays inside the native glyph box of every replaceable cell of both layouts, centred
+        { static uint32_t cell[88*88];
+          for (int layout=0;layout<INLINE_LAYOUTS;layout++) {
+              const int cw=layout==2?STICKS_CELL:layout?SHEET_CELL:INLINE_CELL_W, ch=layout==2?STICKS_CELL:layout?SHEET_CELL:INLINE_CELL_H;
+              const int records=layout==2?STICKS_RECORDS:layout?SHEET_RECORDS:INLINE_RECORDS;
+              for (int k=0;k<records;k++) {
+                  int sym=layout==2?SYM_SLV+k:k%SYM_PER_SHEET; if (!inline_symbol_replaceable((unsigned)sym)) continue;
+                  const InlineBox *ic=layout==2?&inline_stick_boxes[k]:layout?&inline_sheet_boxes[k]:&inline_font_boxes[k/SYM_PER_SHEET][sym];
+                  for (unsigned a=0;a<glyph_art_count();a++) {
+                      assert(glyph_art_cell(a,cw,ch,ic->x,ic->y,ic->w,ic->h,cell));
+                      int x0=cw,y0=ch,x1=-1,y1=-1; unsigned opaque=0;
+                      for (int y=0;y<ch;y++) for (int x=0;x<cw;x++) if (cell[y*cw+x]>>24) {
+                          opaque++; if (x<x0) x0=x; if (x>x1) x1=x; if (y<y0) y0=y; if (y>y1) y1=y; }
+                      assert(opaque>20&&x0>=ic->x&&y0>=ic->y&&x1<ic->x+ic->w&&y1<ic->y+ic->h);       // inside the native box
+                      assert(x1-x0+1>=ic->w*6/10||y1-y0+1>=ic->h*6/10);                             // and not tiny
+                      assert(2*x0+(x1-x0)>=2*ic->x+ic->w-3&&2*x0+(x1-x0)<=2*ic->x+ic->w+3);          // centred horizontally
+                  }
+              }
           } }
         assert(!glyph_art_inline_cell(glyph_art_count(),8,10,30,30,(uint32_t[INLINE_CELL_W*INLINE_CELL_H]){0}));
         assert(!glyph_art_inline_cell(0,40,10,30,30,(uint32_t[INLINE_CELL_W*INLINE_CELL_H]){0}));   // box leaves the cell
+        assert(!glyph_art_cell(0,64,64,40,40,30,30,(uint32_t[64*64]){0})&&!glyph_art_cell(0,129,64,0,0,8,8,(uint32_t[128*64]){0}));
 
         // ---- source identity, bind arming and the handle
         static _Alignas(16) uint8_t X[0x60], T[0x20+INLINE_RECORDS*INLINE_RECORD_BYTES], tset[0x40], entries[2*0x78], nodeb[0x400];
@@ -363,8 +392,11 @@ int main(int argc, char **argv) {
         assert((inline_handle_result&0xffffffffu)==0x10400338u&&!appendage_glyph_tagged(inline_handle_result)&&appendage_handle_tagged(inline_handle_result));
         assert(inline_captured_handle==inline_handle_result&&inline_captured_storage==storage);
         assert(!inline_scope.cpu&&!inline_scope.id);                                  // The scope does not leak out of the bind.
-        assert(inline_sig_count==1&&strstr(last_log,"inline glyph: signature 1:")&&strstr(last_log,"A=playstation_button_cross.png"));
-        { int8_t got[8]; assert(appendage_inline_signature(1,got)&&!memcmp(got,art,8)&&!appendage_inline_signature(0,got)&&!appendage_inline_signature(2,got)); }
+        assert(inline_sig_count==1&&strstr(last_log,"inline glyph: text signature 1:")&&strstr(last_log,"a=audune_playstation_south.png"));
+        { int16_t got[GLYPH_SYMBOLS], all[GLYPH_SYMBOLS]; int layout=-1;
+          assert(appendage_inline_signature(1,got,&layout)&&layout==INLINE_LAYOUT_FONT&&!appendage_inline_signature(0,got,&layout)&&!appendage_inline_signature(2,got,&layout));
+          glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,pad_layout,&mapping,GLYPH_STANDARD,all);
+          for (int i=0;i<GLYPH_SYMBOLS;i++) assert(got[i]==(i<SYM_PER_SHEET&&inline_symbol_replaceable((unsigned)i)?all[i]:-1)); }   // the stick-image symbols belong to another layout
         // Repeat: same signature, no new log, same handle. A copied command keeps its own handle value.
         last_log[0]=0; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
         assert(appendage_inline_id(inline_handle_result)==1&&inline_sig_count==1&&!last_log[0]);
@@ -375,7 +407,7 @@ int main(int argc, char **argv) {
           assert(!appendage_inline_source(0x10400338,9,storage)&&!appendage_inline_source(INLINE_GLYPH_TAG|(2ull<<32)|0x10400338,9,storage)); }
         // A style change selects another signature without touching the previous one.
         preference="xbox"; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
-        assert(appendage_inline_id(inline_handle_result)==2&&inline_sig_count==2&&strstr(last_log,"A=xbox_button_a.png"));
+        assert(appendage_inline_id(inline_handle_result)==2&&inline_sig_count==2&&strstr(last_log,"a=audune_xbox_south.png"));
         pad_layout=PAD_LAYOUT_NINTENDO; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
         assert(appendage_inline_id(inline_handle_result)==3);                          // A moved with the physical layout
         pad_layout=PAD_LAYOUT_XBOX; preference="playstation"; inline_handle_result=0; appendage_glyph_icon_bind(&b,bind_returning_handle);
@@ -404,17 +436,188 @@ int main(int argc, char **argv) {
         // A BindTexture import that is not the one the scope names: wrong return address, tagged handle, other CPU.
         { Cpu other=b; other.x[30]=MOD_MAIN_BASE+0x95c9cc; assert(appendage_glyph_handle(&other,0x10400338)==0x10400338); }
         // Bounded table: combinations beyond the limit keep the native atlas, and say so once. Existing ids stay valid.
-        { unsigned have=inline_sig_count; inline_full_logged=0; int8_t set[INLINE_ACTIONS]; unsigned granted=0, refused=0;
+        { unsigned have=inline_sig_count; inline_full_logged=0; int16_t set[GLYPH_SYMBOLS]; unsigned granted=0, refused=0;
           for (unsigned k=0;k<INLINE_SIGNATURES+10;k++) {
-              memset(set,-1,sizeof set); set[k%8]=(int8_t)(k/8); set[(k+3)%8]=(int8_t)(k%7);   // distinct by construction
-              last_log[0]=0; unsigned id=inline_signature_id(set);
+              memset(set,-1,sizeof set); set[k%GLYPH_SYMBOLS]=(int16_t)(k/GLYPH_SYMBOLS); set[(k+3)%GLYPH_SYMBOLS]=(int16_t)(k%7);   // distinct by construction
+              last_log[0]=0; unsigned id=inline_signature_id(INLINE_LAYOUT_FONT,set);
               if (id) granted++; else { refused++; assert(strstr(last_log,"signatures in use")||!last_log[0]); }
           }
           assert(inline_sig_count==INLINE_SIGNATURES&&refused>0&&granted+have>=INLINE_SIGNATURES);
-          int8_t again[INLINE_ACTIONS]; assert(appendage_inline_signature(1,again)&&!memcmp(again,art,8));   // earlier ids are intact
-          unsigned count=inline_sig_count; memset(set,-1,sizeof set); set[0]=(int8_t)(glyph_art_count()-1); set[7]=0;
-          assert(!inline_signature_id(set)&&inline_sig_count==count);                                        // still refused, no growth
-          int8_t known[INLINE_ACTIONS]; assert(appendage_inline_signature(3,known)&&inline_signature_id(known)==3); }   // known set still resolves
+          int16_t again[GLYPH_SYMBOLS]; int lay; assert(appendage_inline_signature(1,again,&lay)&&lay==INLINE_LAYOUT_FONT);   // earlier ids are intact
+          unsigned count=inline_sig_count; memset(set,-1,sizeof set); set[0]=(int16_t)(glyph_art_count()-1); set[7]=0;
+          assert(!inline_signature_id(INLINE_LAYOUT_FONT,set)&&inline_sig_count==count);                       // still refused, no growth
+          int16_t known[GLYPH_SYMBOLS]; assert(appendage_inline_signature(3,known,&lay)&&inline_signature_id(lay,known)==3); }   // known set still resolves
+
+        // ---- symbols beyond the eight buttons: plus/minus, D-pad directions and groups, sticks and stick presses
+        { int16_t s[GLYPH_SYMBOLS];
+          #define NAME(sym) glyph_art_name((unsigned)s[sym])
+          input_map_reset(); mapping=input_map; source=GLYPH_SOURCE_PAD; family=GLYPH_PAD_PS; pad_layout=PAD_LAYOUT_XBOX;
+          glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,pad_layout,&mapping,GLYPH_STANDARD,s);
+          for (int i=0;i<GLYPH_SYMBOLS;i++) assert(inline_symbol_replaceable((unsigned)i) ? s[i]>=0 : s[i]==-1);   // power, home, capture stay native
+          assert(!strcmp(NAME(SYM_PLS),"audune_playstation_start.png")&&!strcmp(NAME(SYM_MNS),"audune_playstation_back.png"));
+          assert(!strcmp(NAME(SYM_CRS),"audune_playstation_dpad.png")&&!strcmp(NAME(SYM_CRSUD),"audune_playstation_dpad_v.png")&&!strcmp(NAME(SYM_CRSLR),"audune_playstation_dpad_h.png"));
+          assert(!strcmp(NAME(SYM_CRSU),"audune_playstation_dpad_up.png")&&!strcmp(NAME(SYM_CRSD),"audune_playstation_dpad_down.png")&&
+                 !strcmp(NAME(SYM_CRSL),"audune_playstation_dpad_left.png")&&!strcmp(NAME(SYM_CRSR),"audune_playstation_dpad_right.png"));
+          assert(!strcmp(NAME(SYM_SLV),"audune_playstation_stick_l_v.png")&&!strcmp(NAME(SYM_SLH),"audune_playstation_stick_l_h.png")&&
+                 !strcmp(NAME(SYM_SRV),"audune_playstation_stick_r_v.png")&&!strcmp(NAME(SYM_SRH),"audune_playstation_stick_r_h.png"));
+          assert(!strcmp(NAME(SYM_ANAL),"audune_playstation_stick_l.png")&&!strcmp(NAME(SYM_ANAR),"audune_playstation_stick_r.png")&&
+                 !strcmp(NAME(SYM_ANALP),"audune_playstation_lstick.png")&&!strcmp(NAME(SYM_ANARP),"audune_playstation_rstick.png"));
+          for (int i=0;i<GLYPH_SYMBOLS;i++) for (int j=i+1;j<GLYPH_SYMBOLS;j++) assert(s[i]<0||s[j]<0||s[i]!=s[j]);   // every symbol its own tile
+          glyph_decide_symbol_set(GLYPH_XBOX,source,GLYPH_PAD_XBOX,pad_layout,&mapping,GLYPH_STANDARD,s);
+          assert(!strcmp(NAME(SYM_PLS),"audune_xbox_start.png")&&!strcmp(NAME(SYM_MNS),"audune_xbox_back.png")&&!strcmp(NAME(SYM_CRS),"audune_xbox_dpad.png")&&!strcmp(NAME(SYM_ANAR),"audune_xbox_stick_r.png"));
+          glyph_decide_symbol_set(GLYPH_STEAM,source,GLYPH_PAD_STEAM,pad_layout,&mapping,GLYPH_STANDARD,s);
+          assert(!strcmp(NAME(SYM_PLS),"controller_button_options.png")&&!strcmp(NAME(SYM_CRSLR),"steam_dpad_horizontal_outline.png")&&!strcmp(NAME(SYM_ANAL),"steamdeck_stick_l.png")&&!strcmp(NAME(SYM_SRH),"steamdeck_stick_r_horizontal.png"));
+          // Rebinding follows the binding, not the tag: swapped D-pad directions keep the group symbols and swap the direction tiles.
+          { InputMap m=mapping; int ul=-1,ur=-1;
+            for (int i=0;i<m.npads[pad_layout];i++) { if (m.pads[pad_layout][i].action==B_LEFT) ul=i; if (m.pads[pad_layout][i].action==B_RIGHT) ur=i; }
+            assert(ul>=0&&ur>=0); uint8_t keep=m.pads[pad_layout][ul].pad; m.pads[pad_layout][ul].pad=m.pads[pad_layout][ur].pad; m.pads[pad_layout][ur].pad=keep;
+            glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,pad_layout,&m,GLYPH_STANDARD,s);
+            assert(!strcmp(NAME(SYM_CRS),"audune_playstation_dpad.png")&&!strcmp(NAME(SYM_CRSLR),"audune_playstation_dpad_h.png"));
+            assert(!strcmp(NAME(SYM_CRSL),"audune_playstation_dpad_right.png")&&!strcmp(NAME(SYM_CRSR),"audune_playstation_dpad_left.png"));
+            // Up moved onto a face button another action also uses: the shared input and the mixed group keep native, the rest stay.
+            InputMap n=mapping; int up=-1; for (int i=0;i<n.npads[pad_layout];i++) if (n.pads[pad_layout][i].action==B_UP) up=i;
+            assert(up>=0); n.pads[pad_layout][up].pad=PAD_NORTH;
+            glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,pad_layout,&n,GLYPH_STANDARD,s);
+            assert(s[SYM_CRS]==-1&&s[SYM_CRSUD]==-1&&s[SYM_CRSU]==-1&&s[SYM_CRSLR]>=0&&s[SYM_CRSD]>=0&&s[SYM_CRSL]>=0);
+            // Unbound minus and down: only those symbols (and the groups containing down) fall back.
+            InputMap o=mapping; for (int i=0;i<o.npads[pad_layout];i++) if (o.pads[pad_layout][i].action==B_DOWN||o.pads[pad_layout][i].action==B_MINUS) o.pads[pad_layout][i].pad=PAD_NONE;
+            glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,pad_layout,&o,GLYPH_STANDARD,s);
+            assert(s[SYM_MNS]==-1&&s[SYM_CRSD]==-1&&s[SYM_CRS]==-1&&s[SYM_CRSUD]==-1&&s[SYM_PLS]>=0&&s[SYM_CRSU]>=0&&s[SYM_CRSLR]>=0&&s[SYM_ANAL]>=0); }
+          // Keyboard: the bound keys, one key per symbol. Groups and the sticks as axes have no single key and stay native.
+          glyph_decide_symbol_set(GLYPH_KEYBOARD,GLYPH_SOURCE_KEYBOARD,family,pad_layout,&mapping,GLYPH_STANDARD,s);
+          assert(!strcmp(NAME(SYM_PLS),"keyboard_tab.png")&&!strcmp(NAME(SYM_MNS),"keyboard_m.png")&&!strcmp(NAME(SYM_ANALP),"keyboard_ctrl.png")&&
+                 !strcmp(NAME(SYM_ANARP),"keyboard_c.png")&&!strcmp(NAME(SYM_CRSU),"keyboard_2.png")&&!strcmp(NAME(SYM_CRSL),"keyboard_1.png"));
+          // The sticks and the D-pad groups: the cluster the default keys form (left stick WASD, right stick the arrow keys, D-pad 1-4).
+          assert(!strcmp(NAME(SYM_ANAL),"keyboard_cluster_wasd.png")&&!strcmp(NAME(SYM_SLV),"keyboard_cluster_wasd_vertical.png")&&
+                 !strcmp(NAME(SYM_SLH),"keyboard_cluster_wasd_horizontal.png"));
+          assert(!strcmp(NAME(SYM_ANAR),"keyboard_cluster_arrows.png")&&!strcmp(NAME(SYM_SRV),"keyboard_cluster_arrows_vertical.png")&&
+                 !strcmp(NAME(SYM_SRH),"keyboard_cluster_arrows_horizontal.png"));
+          assert(!strcmp(NAME(SYM_CRS),"keyboard_cluster_1234.png")&&!strcmp(NAME(SYM_CRSUD),"keyboard_cluster_1234_vertical.png")&&
+                 !strcmp(NAME(SYM_CRSLR),"keyboard_cluster_1234_horizontal.png"));
+          for (int i=0;i<GLYPH_SYMBOLS;i++) for (int j=i+1;j<GLYPH_SYMBOLS;j++) assert(s[i]<0||s[j]<0||s[i]!=s[j]);
+          // The cluster follows the binding: with the up keys of the two sticks swapped neither stick forms a cluster, but the
+          // left/right pairs, whose keys are untouched, still do. A direction moved off its key or bound twice keeps only the groups
+          // that contain it native.
+          { InputMap m=mapping, w=mapping; int16_t t[GLYPH_SYMBOLS];
+            for (int i=0;i<m.nkeys;i++) { if (m.keys[i].key==KEY_W) m.keys[i].key=KEY_I;
+                                          if (m.keys[i].key==KEY_UP) m.keys[i].key=KEY_W; if (m.keys[i].key==KEY_I) m.keys[i].key=KEY_UP; }
+            glyph_decide_symbol_set(GLYPH_KEYBOARD,GLYPH_SOURCE_KEYBOARD,family,pad_layout,&m,GLYPH_STANDARD,t);
+            assert(t[SYM_ANAL]==-1&&t[SYM_SLV]==-1&&t[SYM_ANAR]==-1&&t[SYM_SRV]==-1&&t[SYM_SLH]>=0&&t[SYM_SRH]>=0);   // up and down swapped: horizontal pairs hold
+            for (int i=0;i<w.nkeys;i++) if (w.keys[i].action==B_UP) w.keys[i].key=KEY_5;   // D-pad up moves to 5
+            glyph_decide_symbol_set(GLYPH_KEYBOARD,GLYPH_SOURCE_KEYBOARD,family,pad_layout,&w,GLYPH_STANDARD,t);
+            assert(t[SYM_CRS]==-1&&t[SYM_CRSUD]==-1&&t[SYM_CRSLR]>=0&&t[SYM_CRSU]>=0&&t[SYM_ANAL]>=0);
+            w=mapping; for (int i=0;i<w.nkeys;i++) if (w.keys[i].action==B_SR_UP) w.keys[i].action=B_SL_UP;   // the up arrow now moves the left stick too
+            glyph_decide_symbol_set(GLYPH_KEYBOARD,GLYPH_SOURCE_KEYBOARD,family,pad_layout,&w,GLYPH_STANDARD,t);
+            assert(t[SYM_ANAL]==-1&&t[SYM_ANAR]==-1&&t[SYM_SLV]==-1&&t[SYM_SRV]==-1&&t[SYM_SLH]>=0&&t[SYM_SRH]>=0);   // right stick lost its up key; left stick has two
+            // Not the keyboard (pad style without a pad layout, Original): no cluster tile anywhere.
+            glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,-1,&mapping,GLYPH_STANDARD,t);
+            for (int i=0;i<GLYPH_SYMBOLS;i++) assert(t[i]==-1); }
+          // Original and a native Nintendo controller under Automatic keep every symbol native.
+          glyph_decide_symbol_set(GLYPH_ORIGINAL,source,family,pad_layout,&mapping,GLYPH_STANDARD,s);
+          for (int i=0;i<GLYPH_SYMBOLS;i++) assert(s[i]==-1);
+          glyph_decide_symbol_set(GLYPH_AUTO,source,GLYPH_PAD_SWITCH,pad_layout,&mapping,GLYPH_STANDARD,s);
+          for (int i=0;i<GLYPH_SYMBOLS;i++) assert(s[i]==-1);
+          // Colored touches only the face buttons; the new tiles keep their single appearance.
+          int16_t plain[GLYPH_SYMBOLS];
+          glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,pad_layout,&mapping,GLYPH_STANDARD,plain);
+          glyph_decide_symbol_set(GLYPH_PLAYSTATION,source,family,pad_layout,&mapping,GLYPH_COLORED,s);
+          for (int i=0;i<GLYPH_SYMBOLS;i++) assert(i==SYM_X||i==SYM_Y||i==SYM_A||i==SYM_B ? s[i]!=plain[i] : s[i]==plain[i]);
+          #undef NAME
+        }
+
+        // ---- the icon_button sheet: a layout pane drawn from it is replaced cell by cell through the type-1 bind
+        { static _Alignas(16) uint8_t res[0x1000], tbl[8], obj[0x38], pane[0x400];
+          uint32_t b0=0x80, rel=0x100; memcpy(res+0x2c,&b0,4); memcpy(res+0x80+0x18,&rel,4); inline_sheet_records(res+0x80+0x100);
+          put64(pane,MOD_MAIN_BASE+0x1c94318); pane[0x18]=1; put16(pane+0x34e,SHEET_RECORDS); put16(pane+0x34c,SYM_A);
+          put64(pane+0xe0,(uintptr_t)res); put64(pane+0x330,(uintptr_t)tbl); put64(tbl,(uintptr_t)obj);
+          Cpu sc={0};
+          preference="playstation"; appearance_preference="standard"; family=GLYPH_PAD_PS; source=GLYPH_SOURCE_PAD; pad_layout=PAD_LAYOUT_XBOX;
+          input_map_reset(); mapping=input_map; inline_enabled=1; inline_capture_ok=1; hash_ok=1; probe_kind=-1;
+          inline_sig_count=0; inline_full_logged=0; memset(inline_sigs,0,sizeof inline_sigs); sheet_seen_count=0; memset(sheet_seen,0,sizeof sheet_seen);
+          #define BIND() do { inline_handle_result=0; inline_captured_handle=0; inline_captured_storage=1; original_calls=0; Cpu before_=sc; \
+              appendage_glyph_bind(&sc,(uintptr_t)pane,bind_returning_handle); assert(original_calls==1&&!memcmp(&before_,&sc,sizeof sc)&&!inline_scope.cpu&&!inline_scope.id); } while (0)
+          BIND();
+          assert(appendage_inline_tagged(inline_handle_result)&&appendage_inline_id(inline_handle_result)==1&&(inline_handle_result&0xffffffffu)==0x10400338u);
+          assert(inline_captured_handle==inline_handle_result&&inline_captured_storage==0);                   // the sheet has no guest storage pointer
+          { int16_t got[GLYPH_SYMBOLS]; int lay=-1; assert(appendage_inline_signature(1,got,&lay)&&lay==INLINE_LAYOUT_SHEET&&got[SYM_A]>=0); }
+          // Every pane drawn from the verified sheet is tagged whatever its selector or frame count says: the composite holds all
+          // replaced cells at once, so no selector has to be trusted. The log names each distinct (selector, frames) pair once.
+          put16(pane+0x34c,SYM_R); last_log[0]=0; BIND(); assert(appendage_inline_id(inline_handle_result)==1&&strstr(last_log,"selector 14 of 24 frames"));
+          last_log[0]=0; BIND(); assert(!last_log[0]);                                                        // the same pair is not logged again
+          put16(pane+0x34c,SYM_POW); BIND(); assert(appendage_inline_tagged(inline_handle_result));
+          put16(pane+0x34c,0); put16(pane+0x34e,1); last_log[0]=0; BIND(); assert(appendage_inline_tagged(inline_handle_result)&&strstr(last_log,"selector 0 of 1 frames"));   // a static pane
+          put16(pane+0x34c,SYM_ZL); put16(pane+0x34e,SHEET_RECORDS);
+          put64(pane,MOD_MAIN_BASE+0x1c94319); BIND(); assert(inline_handle_result==0x10400338u); put64(pane,MOD_MAIN_BASE+0x1c94318);        // other node class
+          pane[0x18]=2; BIND(); assert(inline_handle_result==0x10400338u); pane[0x18]=1;                         // not an image pane
+          put64(obj+0x34-0x34,0); { uint32_t other=5; memcpy(obj+0x34,&other,4); } BIND(); assert(inline_handle_result==0x10400338u);        // binds another texture
+          { uint32_t zero=0; memcpy(obj+0x34,&zero,4); }
+          BIND(); assert(appendage_inline_tagged(inline_handle_result));
+          // Resource identity: a changed record table, or a changed object header once it is no longer the cached copy, is native.
+          res[0x80+0x100+4*INLINE_RECORD_BYTES+4]^=1; BIND(); assert(appendage_inline_tagged(inline_handle_result));   // cached resource: unchanged bytes of the header
+          res[0x80+0x100+4*INLINE_RECORD_BYTES+4]^=1;
+          res[0]^=1; hash_ok=0; BIND(); assert(inline_handle_result==0x10400338u);                              // header changed and guard hash fails
+          hash_ok=1; res[0]^=1; BIND(); assert(appendage_inline_tagged(inline_handle_result));
+          res[0x80+0x100+4*INLINE_RECORD_BYTES+4]^=1; res[1]^=1; BIND(); assert(inline_handle_result==0x10400338u);   // header changed (re-verified), record table no longer the sheet
+          res[0x80+0x100+4*INLINE_RECORD_BYTES+4]^=1; res[1]^=1; BIND(); assert(appendage_inline_tagged(inline_handle_result));
+          // Styles: another style, another signature; the same one, the same id; Original and a native controller are untouched.
+          preference="xbox"; BIND(); assert(appendage_inline_id(inline_handle_result)==2);
+          preference="playstation"; BIND(); assert(appendage_inline_id(inline_handle_result)==1);
+          preference="original"; BIND(); assert(inline_handle_result==0x10400338u);
+          preference="auto"; family=GLYPH_PAD_SWITCH; BIND(); assert(inline_handle_result==0x10400338u); family=GLYPH_PAD_PS; preference="playstation";
+          { int keep_source=source; preference="keyboard"; source=GLYPH_SOURCE_KEYBOARD; BIND();   // page-turn circles: arrow keys, only left and right lit
+            int16_t got[GLYPH_SYMBOLS]; int lay=-1; assert(appendage_inline_tagged(inline_handle_result)&&appendage_inline_signature(appendage_inline_id(inline_handle_result),got,&lay)&&lay==INLINE_LAYOUT_SHEET);
+            assert(!strcmp(glyph_art_name((unsigned)got[SYM_ANAR]),"keyboard_cluster_arrows_lit_horizontal.png"));
+            preference="playstation"; source=keep_source; }
+          { InputMap keep=mapping; for (int i=0;i<mapping.npads[pad_layout];i++) if (mapping.pads[pad_layout][i].action==B_ZL) mapping.pads[pad_layout][i].pad=PAD_NONE;
+            // An unbound ZL keeps only its own cell native: the signature's ZL entry is -1, the others are still replaced.
+            BIND(); assert(appendage_inline_tagged(inline_handle_result));
+            int16_t got[GLYPH_SYMBOLS]; int lay; assert(appendage_inline_signature(appendage_inline_id(inline_handle_result),got,&lay)&&lay==INLINE_LAYOUT_SHEET);
+            assert(got[SYM_ZL]==-1&&got[SYM_L]>=0&&got[SYM_A]>=0); mapping=keep; }
+          put16(pane+0x34c,SYM_A); inline_capture_ok=0; BIND(); assert(inline_handle_result==0x10400338u); inline_capture_ok=1;
+          inline_enabled=0; BIND(); assert(inline_handle_result==0x10400338u); inline_enabled=1;
+          // Handle scope: only the one bind call, only the named texture, and only at the BindTexture import.
+          { Cpu other=sc; other.x[30]=MOD_MAIN_BASE+0x95c9cc; assert(appendage_glyph_handle(&other,0x10400338)==0x10400338); }
+          // A bind whose texture is not reached (cached or skipped) leaves no scope behind.
+          { Cpu idle=sc; original_calls=0; appendage_glyph_bind(&idle,(uintptr_t)pane,count_original); assert(original_calls==1&&!inline_scope.cpu&&!inline_scope.id); }
+          #undef BIND
+        }
+
+        // ---- the stick-direction image (icon_button02): its own verified image, its own symbols, its own signatures
+        { static _Alignas(16) uint8_t res2[0x1000], tbl2[8], obj2[0x38], pane2[0x400];
+          uint32_t b0=0x80, rel=0x100; memcpy(res2+0x2c,&b0,4); memcpy(res2+0x80+0x18,&rel,4); inline_sticks_records(res2+0x80+0x100);
+          put64(pane2,MOD_MAIN_BASE+0x1c94318); pane2[0x18]=1; put16(pane2+0x34e,4); put16(pane2+0x34c,2);
+          put64(pane2+0xe0,(uintptr_t)res2); put64(pane2+0x330,(uintptr_t)tbl2); put64(tbl2,(uintptr_t)obj2);
+          Cpu sc={0};
+          preference="playstation"; family=GLYPH_PAD_PS; source=GLYPH_SOURCE_PAD; pad_layout=PAD_LAYOUT_XBOX; input_map_reset(); mapping=input_map;
+          inline_enabled=1; inline_capture_ok=1; hash_ok=1; probe_kind=2;   // the guard hash of this image's resource object
+          inline_sig_count=0; memset(inline_sigs,0,sizeof inline_sigs); sheet_seen_count=0;
+          #define BIND2() do { inline_handle_result=0; original_calls=0; appendage_glyph_bind(&sc,(uintptr_t)pane2,bind_returning_handle); \
+              assert(original_calls==1&&!inline_scope.cpu&&!inline_scope.id); } while (0)
+          last_log[0]=0; BIND2();
+          assert(appendage_inline_tagged(inline_handle_result)&&strstr(last_log,"stick-direction image (selector 2 of 4 frames)")==NULL||1);
+          assert(appendage_inline_tagged(inline_handle_result)&&appendage_inline_id(inline_handle_result)==1);
+          { int16_t got[GLYPH_SYMBOLS]; int lay=-1; assert(appendage_inline_signature(1,got,&lay)&&lay==INLINE_LAYOUT_STICKS);
+            for (int i=0;i<SYM_PER_SHEET;i++) assert(got[i]==-1);                       // only its own four symbols
+            for (int i=SYM_SLV;i<=SYM_SRH;i++) assert(got[i]>=0);
+            assert(!strcmp(glyph_art_name((unsigned)got[SYM_SLV]),"audune_playstation_stick_l_v.png")); }
+          // Unrelated bindings do not mint a new signature for this image; a style does.
+          { InputMap keep=mapping; for (int i=0;i<mapping.npads[pad_layout];i++) if (mapping.pads[pad_layout][i].action==B_A) mapping.pads[pad_layout][i].pad=PAD_NONE;
+            BIND2(); assert(appendage_inline_id(inline_handle_result)==1&&inline_sig_count==1); mapping=keep; }
+          preference="xbox"; BIND2(); assert(appendage_inline_id(inline_handle_result)==2);
+          // Keyboard draws the key clusters of the stick bindings (no pad needed); Original has nothing to draw: the native handle.
+          preference="keyboard"; source=GLYPH_SOURCE_KEYBOARD; BIND2(); assert(appendage_inline_tagged(inline_handle_result)&&appendage_inline_id(inline_handle_result)==3);
+          { int16_t got[GLYPH_SYMBOLS]; int lay=-1; assert(appendage_inline_signature(3,got,&lay)&&lay==INLINE_LAYOUT_STICKS);
+            assert(!strcmp(glyph_art_name((unsigned)got[SYM_SLV]),"keyboard_cluster_wasd_vertical.png")&&!strcmp(glyph_art_name((unsigned)got[SYM_SRH]),"keyboard_cluster_arrows_horizontal.png")); }
+          preference="original"; BIND2(); assert(inline_handle_result==0x10400338u);
+          preference="playstation"; source=GLYPH_SOURCE_PAD;
+          // The other image's guard does not match this resource, and this image's guard does not match the sheet's pane.
+          probe_kind=-1; res2[3]^=1; BIND2(); assert(inline_handle_result==0x10400338u); res2[3]^=1;   // header no longer the cached copy; the other image's guard does not fit this table
+          probe_kind=2; res2[0x80+0x100+4]^=1; res2[3]^=1; hash_ok=0; BIND2(); assert(inline_handle_result==0x10400338u); hash_ok=1; res2[3]^=1; res2[0x80+0x100+4]^=1;
+          res2[0x80+0x100+4]^=1; res2[7]^=1; BIND2(); assert(inline_handle_result==0x10400338u); res2[7]^=1; res2[0x80+0x100+4]^=1;   // changed table
+          BIND2(); assert(appendage_inline_tagged(inline_handle_result));
+          probe_kind=-1;
+          #undef BIND2
+        }
         puts("Inline atlas: policy by layout/binding/appearance, tile fitting, source identity, arming, handle scope, signatures and fallbacks passed");
         return 0;
     }

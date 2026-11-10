@@ -222,7 +222,9 @@ void ikb_intent_mouse_take(int32_t *dx, int32_t *dy) {
 }
 
 int ikb_glyph_key(int key) {
-    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R || key == KEY_SPACE) return key;
+    // Keys whose cap does not change with the layout keep their identity: they have no letter or digit label to look up.
+    if (key == KEY_MOUSE_L || key == KEY_MOUSE_R || key == KEY_SPACE || key == KEY_TAB || key == KEY_LSHIFT || key == KEY_LCTRL ||
+        key == KEY_UP || key == KEY_DOWN || key == KEY_LEFT || key == KEY_RIGHT) return key;
     UINT label = MapVirtualKeyW((UINT)key_vk(key), MAPVK_VK_TO_CHAR);
     if (label >= 'A' && label <= 'Z') return KEY_A + (int)(label - 'A');
     if (label >= '0' && label <= '9') return KEY_0 + (int)(label - '0');

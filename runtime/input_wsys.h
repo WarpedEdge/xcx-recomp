@@ -16,6 +16,6 @@ void ikb_menu_closed(void);                   // the menu closed: a capture that
 // ---- what input.c provides the back end
 int input_cursor_allowed(void);               // no text entry or menu open, the mouse camera on, input not disabled
 
-int ikb_glyph_key(int key); // Current unshifted keyboard label, as a supported letter/digit/mouse key; 0 unsupported.
+int ikb_glyph_key(int key); // Current unshifted keyboard label, as a supported letter/digit key; mouse buttons, Space, Tab, Shift, Ctrl and the arrow keys as themselves; 0 unsupported.
 
 int ikb_intent_down(int key); // Display observation excludes explicitly identified generated mouse events.

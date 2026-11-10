@@ -72,11 +72,46 @@ def main():
     header = (ROOT/'runtime/inline_glyph.h').read_text()
     constant = bytes(int(x, 16) for x in re.search(r'INLINE_RECORDS_SHA256 \{([^}]*)\}', header.replace('\\\n', ' ')).group(1).replace(' ', '').split(',') if x)
     assert len(table) == 1344 and hashlib.sha256(table).digest() == constant, 'closed-form atlas table does not match INLINE_RECORDS_SHA256'
-    cells = re.findall(r'\{(\d+), (\d), (\d+), (\d+), (\d+), (\d+)\}', header)
-    assert len(cells) == 16 and sorted(int(c[0]) for c in cells) == [5,6,7,8,13,14,15,16,29,30,31,32,37,38,39,40]
-    # Each action owns a standard and a large cell 24 records apart, and only those sixteen cells are ever replaced.
-    for rec, act, *_ in ((int(c[0]), int(c[1])) for c in cells):
-        assert any(int(o[0]) == (rec + 24 if rec < 24 else rec - 24) and int(o[1]) == act for o in cells)
+    # The icon_button sheet's table is a closed form too: 8x3 cells of 64x64 in a 512x192 image. Its SHA-256 is the identity constant,
+    # and records 14, 6, 7 / 5 / 15 of the closed form reproduce the three HUD hashes the accepted route verified on real runs
+    # (appendage_glyph.c records_match), which ties this derivation to the live resource without any game data.
+    sheet = b''.join(struct.pack('<ffffff', 1.0, 1.0, f32(63/512), f32(63/192), f32((i % 8*64 + 0.5)/512), f32((i//8*64 + 0.5)/192)) + struct.pack('<HH', 64, 64) for i in range(24))
+    sheet_constant = bytes(int(x, 16) for x in re.search(r'SHEET_RECORDS_SHA256 \{([^}]*)\}', header).group(1).replace(' ', '').split(',') if x)
+    assert len(sheet) == 672 and hashlib.sha256(sheet).digest() == sheet_constant, 'closed-form sheet table does not match SHEET_RECORDS_SHA256'
+    glyph_c = (ROOT/'runtime/appendage_glyph.c').read_text()
+    def runtime_hash(name):
+        return bytes(int(x, 16) for x in re.search(name + r'\[32\] = \{([^}]*)\}', glyph_c, re.S).group(1).replace('\n', '').replace(' ', '').split(',') if x)
+    selectors = [int(x) for x in re.search(r'selectors\[NODE_SLOTS\] = \{([^}]*)\}', glyph_c).group(1).split(',')]
+    rec = lambda i: sheet[i*28:(i+1)*28]
+    assert hashlib.sha256(b''.join(rec(i) for i in selectors[:3])).digest() == runtime_hash('expected'), 'sheet records 14, 6, 7 differ from the HUD runtime constant'
+    assert hashlib.sha256(rec(5)).digest() == runtime_hash('x_record') and hashlib.sha256(rec(15)).digest() == runtime_hash('zl_record')
+    # The stick-direction image (icon_button02): 4 cells of 88x88 in a 352x88 image. Closed form, SHA-256 constant, and its guard
+    # constant is the one the opt-in resource probe already carried for icon_button02 (appendage_glyph.c probe_prefixes[2]).
+    sticks = b''.join(struct.pack('<ffffff', 1.0, 1.0, f32(87.75/352), f32(87/88), f32((i*88 + 0.5)/352), f32(0.5/88)) + struct.pack('<HH', 88, 88) for i in range(4))
+    def header_hash(name):
+        return bytes(int(x, 16) for x in re.search(name + r' \{([^}]*)\}', header.replace('\\\n', ' ')).group(1).replace(' ', '').split(',') if x)
+    assert len(sticks) == 112 and hashlib.sha256(sticks).digest() == header_hash('STICKS_RECORDS_SHA256'), 'closed-form stick table does not match STICKS_RECORDS_SHA256'
+    probe_rows = re.search(r'probe_prefixes\[4\]\[32\] = \{(.*?)\n\};', glyph_c, re.S).group(1)
+    probe2 = [bytes(int(x, 16) for x in m.replace('\n', '').replace(' ', '').split(',') if x) for m in re.findall(r'\{([^{}]*)\}', probe_rows)][2]
+    assert header_hash('STICKS_GUARD_SHA256') == probe2, 'stick image guard differs from the probe constant for icon_button02'
+    # Native glyph boxes: every box lies inside its cell; the replaceable symbols (not power 1, home 2, capture 23) have one.
+    def boxes(name):
+        body = re.search(name + r'[^=]*= \{(.*?)\n\};', header, re.S).group(1) if name != 'inline_stick_boxes' else re.search(name + r'[^=]*= (\{.*?\});', header, re.S).group(1)
+        return [tuple(int(v) for v in m) for m in re.findall(r'\{(\d+), (\d+), (\d+), (\d+)\}', body)]
+    font, sheet_boxes, stick_boxes = boxes('inline_font_boxes'), boxes('inline_sheet_boxes'), boxes('inline_stick_boxes')
+    assert len(font) == 48 and len(sheet_boxes) == 24 and len(stick_boxes) == 4
+    for k, (x, y, w, h) in enumerate(font):
+        assert w > 0 and h > 0 and x + w <= 46 and y + h <= 50, ('font box', k)
+    for k, (x, y, w, h) in enumerate(sheet_boxes):
+        assert w > 0 and h > 0 and x + w <= 64 and y + h <= 64, ('sheet box', k)
+    for k, (x, y, w, h) in enumerate(stick_boxes):
+        assert w > 0 and h > 0 and x + w <= 88 and y + h <= 88, ('stick box', k)
+    # The same 24 symbols in the same order in both layouts and in the policy enum; the four stick-image symbols follow them.
+    policy = (ROOT/'runtime/input_glyphs.h').read_text()
+    enum_text = re.search(r'enum \{ SYM_CRS,(.*?)GLYPH_SYMBOLS', policy, re.S).group(0)
+    order = re.findall(r'SYM_([A-Z0-9]+)', enum_text.split('SYM_PER_SHEET')[0])
+    assert order == 'CRS POW HOM MNS PLS X Y A B ANALP ANARP ANAL ANAR L R ZL ZR CRSU CRSD CRSL CRSR CRSUD CRSLR CAP'.split(), order
+    assert 'SYM_SLV = SYM_PER_SHEET, SYM_SLH, SYM_SRV, SYM_SRH' in enum_text
     spec = importlib.util.spec_from_file_location('appendage', ROOT/'recomp/appendage.py')
     hooks = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hooks)
@@ -143,7 +178,7 @@ def main():
     rsp = out/'gpu.rsp'
     rsp.write_text('\n'.join('"'+str(x)+'"' for x in objects+[obj]))
     gpu = out/'gpu'
-    run([args.cc, '-fuse-ld=lld', '-no-pie', '-Wl,-z,noexecstack', '-Wl,--wrap=main', '-Wl,--wrap=sha256',
+    run([args.cc, '-fuse-ld=lld', '-no-pie', '-Wl,-z,noexecstack', '-Wl,--wrap=main', '-Wl,--wrap=sha256', '-Wl,--wrap=input_glyph_snapshot',
          '@'+str(rsp), '-lvulkan', '-lSDL3', '-lopus', '-lvpx', '-lzstd', '-l:libstdc++.a', '-lm',
          '-lpthread', '-ldl', '-Wl,-rpath,'+str(build), '-o', gpu])
     sdl_obj = out/'sdl.o'

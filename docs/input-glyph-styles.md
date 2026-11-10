@@ -64,25 +64,34 @@ This remains a visible experimental limitation for review; unlimited-session sty
 
 ## Licensed assets and reproduction
 
-Source: Kenney Input Prompts **1.5A**, CC0. The 75 curated style PNGs, exact archive member names and per-file SHA-256 values are in [styles/provenance.json](../assets/appendage-glyph/styles/provenance.json). The original [license](../assets/appendage-glyph/License.txt) and [third-party notice](../THIRD_PARTY_NOTICES.md) accompany them. A file-specific Git attribute preserves the upstream license bytes, including line endings and whitespace, so its provenance hash survives checkout. The older R1 PNG/include/tool remain an attributed reproducibility fixture, not the production multi-style asset path. No Nintendo resource pixels are distributed.
+Two packs supply the 138 style tiles, each under its own license:
+
+- **Audune Prompts 1.3.1** by Audune, [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), <https://audune.itch.io/audune-prompts>: the 58 Xbox and PlayStation tiles (`assets/appendage-glyph/audune/`). Each is one 64x64 cell cut, unscaled, from the pack's "Light" sprite sheet by [tools/make_audune_tiles.py](../tools/make_audune_tiles.py); the D-pad direction tiles have their white and dim arms swapped (Audune draws the pressed direction dim; here it is the bright one), and the four PlayStation *colored* face tiles also have the dark symbol repainted in the symbol color of the pack's "Dark" sheet. The notice with the attribution line and the change statement is [audune/NOTICE.txt](../assets/appendage-glyph/audune/NOTICE.txt); the package, the two sheets and every tile (source cell, change, SHA-256) are in the `audune` block and the `pack: audune` entries of the provenance. The tiles are CC BY-SA 4.0, not MIT. Whether the compiled copy in `runtime/glyph_art.inc` and a binary that embeds it must also be offered under share-alike terms is a project decision that has not been made (see the controls context); the include's header states the license.
+- **Kenney Input Prompts 1.5A**, CC0: the 41 keyboard tiles, the 10 keyboard-cluster composites (nine key groups and the arrow cluster with only left and right lit, drawn for the page-turn circles) (`tools/make_keyboard_clusters.py`) and the 29 Steam tiles (the Audune pack has no Steam set). The original [license](../assets/appendage-glyph/License.txt) and [third-party notice](../THIRD_PARTY_NOTICES.md) accompany them; exact archive member names and per-file SHA-256 values are in [styles/provenance.json](../assets/appendage-glyph/styles/provenance.json). A file-specific Git attribute preserves the upstream license bytes. The older R1 PNG/include/tool remain an attributed reproducibility fixture, not the production multi-style asset path.
+
+No Nintendo resource pixels are distributed. Xbox and PlayStation tiles follow the Audune layout: standard Xbox faces are the pack's Switch-set letters A/B/X/Y, colored Xbox faces its Xbox tiles, PlayStation Start/Back are the pack's generic play and back arrows (its DualShock 4 set has a touchpad instead of Options and Share).
 
 | Artifact | SHA-256 |
 | --- | --- |
 | Original Kenney package | `ac2fcf599080b0f3ba2d174c9474db6df1a0e96ff0662580e2da79a122ab78a1` |
-| License | `ca2f58f80f903512119da5828868199478119818cd7ecffb303d625cb74cbb5a` |
-| Styles provenance | `f52c8f9db7eb255356c8a95156a507b92183174fdccf5bbe537e7c4f4e9fed76` |
-| Production licensed derivative | `f99a16f14178658f0c98d68a55b4036d5bcb26be24a2672ae7d5cf1c038642bb` |
+| Original Audune package | `9b94d0cf744b73f2d43ca328d8ebf6ad14f382ec4d04f1a03543a074db4cf55c` |
+| Kenney license | `ca2f58f80f903512119da5828868199478119818cd7ecffb303d625cb74cbb5a` |
+| Audune notice | `edd6fb443be4dd4b5a01307279eda204ffc2da3f7cb69b3619682bc5d4a903c2` |
+| Styles provenance | `571a6793a9aa4e7c4596ac794a223fd17da5561a465d2759809f1389b6c93ebc` |
+| Production licensed derivative | `2639150ea8e99bb972adcd785631db19d464180b65f9d8707157f918b1c3e8bb` |
 
 Reproduction needs Python 3.14 with `compression.zstd` and Pillow (verified with Pillow 12.3.0). From the repository root:
 
 ```sh
+# Only to rebuild the Audune tiles from the downloaded package (idempotent):
+# python3 tools/make_audune_tiles.py --zip /path/to/audune-prompts-1.3.1.zip
 python3 tools/make_glyph_styles.py --out build/glyph-repro/styles.inc
 cmp build/glyph-repro/styles.inc runtime/glyph_art.inc
 python3 tools/make_appendage_glyph.py --out build/glyph-repro/r1.inc
 cmp build/glyph-repro/r1.inc runtime/appendage_r1.inc
 ```
 
-The production include contains 75 individually compressed licensed tiles, totaling 24,184 compressed bytes. The tool verifies source hashes and dimensions before writing the derivative. Reproduction does not read game assets or require a GPU.
+The production include contains 138 individually compressed licensed tiles, totaling 74,229 compressed bytes. The tool verifies source hashes and dimensions before writing the derivative. Reproduction does not read game assets or require a GPU.
 
 ## Build and checks
 

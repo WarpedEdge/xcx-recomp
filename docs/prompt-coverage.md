@@ -84,7 +84,7 @@ The independent input configuration identifies field R / Type4 Button1 9 / Func2
 
 Original retains unchanged game rendering, and Automatic selects the same native artwork for intentional activity from an exposed Nintendo controller. The redundant explicit Nintendo Switch choice was removed at the owner's request. Original/Automatic use the game's existing handle; neither extracts or distributes Nintendo pixels or relabels native artwork for custom bindings. Physical Nintendo hardware acceptance is separate from the source/policy test.
 
-`glyph_appearance = standard|colored` is independent of `glyph_style`, `pad_layout` and `bind_*`. Twelve exact pinned Kenney members add colored face buttons for PlayStation, Xbox and Steam Controller, bringing the licensed set to 75. Missing variants keep Standard; native Nintendo and keyboard/mouse remain unchanged. Automatic applies the selected appearance after family/binding translation.
+`glyph_appearance = standard|colored` is independent of `glyph_style`, `pad_layout` and `bind_*`. Twelve exact pinned Kenney members add colored face buttons for PlayStation, Xbox and Steam Controller, bringing the licensed set to 75. In the local trial the Xbox and PlayStation tiles (including the colored faces) are replaced by Audune Prompts 1.3.1 (CC BY-SA 4.0, see [input-glyph-styles.md](input-glyph-styles.md#licensed-assets-and-reproduction)); keyboard and Steam stay Kenney, and the set is 137 tiles. Missing variants keep Standard; native Nintendo and keyboard/mouse remain unchanged. Automatic applies the selected appearance after family/binding translation.
 
 The immutable artwork ID now uses bits 32–38 (seven bits); reserved bits 39–43, generation bits 44–55 and the upper tag remain separate. Fixed capacity is 128, with 75 available images allocated only on demand. The 192-record generation history is unchanged. No new upload/release mechanism or global atlas mutation was introduced. The fifth licensed UV region is Board ZL at (448,64), with exact record hash `7ce0a3a3a806647b28e56f64b57346a6360500bdc5420525ca7e5de94fad4fa9`.
 
@@ -157,3 +157,17 @@ Implemented in the trial branch and covered by automated tests; **not owner-acce
 | Left native on purpose | `+`/`-`, D-pad, sticks, power/home/capture, compound symbols, premade tutorial images, unbound/shared/tileless bindings, Nintendo controllers under Automatic |
 | Unchanged | Accepted HUD guides (Appendage, weapon X, NPC interaction A) and the unconfirmed Target R / Board ZL |
 | Known limits | Colored tint through the text material is unverified; style changes reach the next layout (reopen the page); 24 signatures per session; atlas reload falls back to native |
+
+
+## Coverage inventory after the layout/D-pad/stick pass — November 9, 2026
+
+Three classes only. "Accepted" means seen working by the owner; "unconfirmed" means implemented and automatically tested.
+
+| Class | Prompts |
+| --- | --- |
+| **Implemented and owner-accepted** | HUD guides: Appendage, weapon X, NPC interaction A. Inline text buttons A/B/X/Y/L/R/ZL/ZR (Gameplay Tips, field hints, Map footer) with PlayStation, Xbox, Button layout and Standard/Colored |
+| **Implemented, unconfirmed** | Text: `+`, `-`, D-pad directions and groups, sticks, stick presses; keyboard stick and D-pad groups as key clusters (right stick arrow keys, left stick WASD, D-pad 1-4; page-turn included; owner screenshots showed these native before the cluster tiles); Keyboard & Mouse and Automatic for text. Layout widgets drawn from `icon_button`: tab L/R, page-turn (right stick), `A Close` popups, `Details ZR`, `Check Control Guide`, `R + D-pad` widget, in the same symbols. Stick-direction images (`icon_button02`, Control Guide pages). Other field-A captions, Target R, Board ZL (earlier) |
+| **Unresolved or unsupported** | `common_button_red_a` (red-ringed A image), `icon_button03` white masks, button glow, Soul Challenge `B`, premade tutorial pictures, power/home/capture; on keyboard: a stick or the D-pad whose keys are not the arrow keys, WASD or 1-4 in their own positions (native); unbound/shared bindings stay native by design; Automatic with a Nintendo controller native by design |
+
+Not complete: the known unsupported prompts above stay native, each with its reason. Whether every layout widget reaches the verified path is
+only established by the owner test (the log lists the panes reached).

@@ -185,3 +185,63 @@ Two owner sessions with the candidate. These are owner-reported screenshots, not
 - **Native, layout-based prompts (not covered):** tab `L`/`R` icons (Map, Tips), page-turn `R` icons, `Details ... ZR`, the popup `A Close` (Story Mission Complete, tip popups), `X Check Control Guide`, the `R + D-pad` mini-map widget. No `Close` + A message row exists, which fits layout-resident widgets; the route into their textures is not traced.
 - **Native on purpose:** stick-presses (`Find Self`, `Show Navigation`), D-pad, `+`/`-`.
 - **Not yet accepted:** Keyboard & Mouse and Automatic with inline text, and whether a page reopen is needed after a style change. Acceptance of the whole candidate is pending the source review.
+
+## Layout buttons, D-pad, sticks, plus/minus (second pass, November 9, 2026)
+
+Status: **implemented and automatically tested; not yet visually accepted.** The first pass left the layout-drawn prompts native
+(tab L/R, page-turn R, popup `A Close`, `Details ZR`, `Check Control Guide`). This pass traced them and extended the same
+mechanism; it also added the D-pad, stick and plus/minus symbols to the text path.
+
+### Source findings (offline, from the pinned archive; `build/glyph-layout-trace-20261109/`)
+
+- The game's `sts.ard` has 104,824 members addressed by `xxh64` of the path. The reader was checked against the recorded `font_icon`
+  SHA-256. 43 layouts reference the image **`/ui/image/icon_button.wilay`**: the page-turn (`common_pageline`), tab
+  (`common_fieldtab`, `mc_IconLButton/RButton`), pager, guide, `common_button` and shoulder-button layouts among them. It is a
+  **512x192 BC7 sheet of 24 cells of 64x64**, the same 24 symbols in the same order as the text atlas (`crs pow hom mns pls x y a b
+  analp anarp anal anar l r zl zr crsu crsd crsl crsr crsud crslr cap`): the 512x192 image the accepted HUD route already
+  swaps for its guide nodes. Its 24-record table is a closed form; its `sha256` (`8c6c9783...`) is the new identity constant, and records
+  14, 6, 7 / 5 / 15 of the closed form reproduce the three hashes the HUD route verified on real runs, so file records equal the live resource.
+- The first 128 bytes of the image file hash to the HUD route's runtime guard (`ed9164c1...`), i.e. the live resource object equals the file
+  header. The same relation holds for the other two images' probe constants.
+- **`icon_button02`** (352x88, 4 cells of 88x88: left/right stick vertical and horizontal; referenced by one layout, the Control Guide
+  "operate" pages) and **`icon_button03`** (368x150, a white-mask copy of the 24 symbols, referenced by one layout with `rect_Btn01/02`).
+- The shared type-1 rectangle draw (`0xa275c0`, the loop whose bind the HUD route already hooks at `0xa27678`) binds `table[frame]` once
+  per layer for every image pane, so these panes reach the existing hook; no new generator site is needed.
+- Not on this path: `common_button_red_a` (a single 64x64 red-ringed `A` image in `common_button`), `03020_button_glow`, the Soul Challenge
+  `B`, `icon_button03`'s consumer. They are listed, not claimed.
+
+### What was added
+
+1. **One symbol table.** `SYM_*` (24 shared symbols plus the four stick-direction symbols) and `glyph_decide_symbol_set` give one policy
+   for the text atlas, the sheet and the stick image: single-action symbols follow the current binding (Button layout, rebinding, unbound
+   or shared inputs fall back per symbol); the whole D-pad, vertical and horizontal pairs draw a group tile only when the actions are
+   bound exactly to the matching D-pad inputs (any permutation), otherwise native; the sticks as axes are fixed on a pad (not rebindable).
+   Keyboard & Mouse uses the bound keys (buttons, +/- Tab/M, presses Ctrl/C, D-pad 1-4). Sticks and D-pad groups use a key-cluster tile (arrow keys, WASD, 1-4; four keys, or the up/down or left/right pair) when the directions they stand for are bound, once each and unshared, to the keys of one cluster in the cluster's own positions; any other binding keeps them native. The nine cluster tiles are composed by `tools/make_keyboard_clusters.py` from pinned CC0 Kenney key tiles (members and hashes in the provenance). Art ids are 16-bit; the HUD route addresses only the first 128 tiles.
+2. **53 more licensed tiles** from the same pinned Kenney package (CC0), 128 in total: plus/minus, D-pad (whole, four directions, pairs),
+   sticks, stick presses and stick directions for PlayStation, Xbox and Steam (the Steam set uses the Steam Deck stick tiles), Tab and Ctrl keys.
+   PlayStation plus/minus are the PS5 options/create tiles: the PS4 options and share pills are indistinguishable at 30 px.
+3. **Sheet and stick-image arming** in the existing type-1 bind wrapper (`sheet_arm`): any pane whose resource object matches the image's
+   guard hash and whose record table matches its closed-form SHA-256 (cached per address and content) tags the BindTexture handle with a
+   signature, the same `0xa6` tag, carrying and resolving as the text atlas. A pane the HUD route owns is left to it. With Original selected
+   nothing runs. The pane's selector and frame count are only logged (distinct pairs, once each), not trusted: the composite holds every
+   replaced cell, so a pane showing any cell uses it correctly.
+4. **Three layouts in one composite builder:** BC7 blit decode on the GPU, then only the replaceable cells overwritten (signature per layout and
+   per-layout symbol set, so an unrelated binding does not mint a new signature). 48 signatures per session.
+
+### Checks run (`build/glyph-inline-tests-7/`)
+
+| Check | Result |
+| --- | --- |
+| `tests/appendage_glyph_test.py --gpu-build build/glyph-inline-trial-6` | exit 0: policy 24,849 cases, unit enabled/guides/resources/icon/inline/disabled, hook identity, SDL, GPU stages normal/pixels/image/upload/blit/view/source |
+| GPU fixture (RX 7900 XTX, real Vulkan) | for the 368x300 atlas, the 512x192 sheet and the 352x88 stick image: native BC7 decode everywhere outside the replaced cells, replaced cells equal the fitted tiles, native blocks unchanged, second signature separate, re-registration/foreign storage and every injected failure fall back |
+| Closed forms | sheet and stick tables reproduce their SHA-256 constants; sheet records reproduce the three HUD runtime hashes; stick guard equals the probe's constant; all glyph boxes lie in their cells; symbol order identical in both headers |
+| Unit | per-symbol policy for PlayStation/Xbox/Steam/keyboard, rebinding, shared and unbound inputs, group rules; pane arming incl. wrong class/type/hash/table/texture, cache invalidation, scope isolation; the test memory probe now faults on protected pages like the runtime |
+| Mutation spot checks | changed expectations made two of the new assertions fail, so they execute |
+| `check_content.py`, `git diff --check` | exit 0 |
+| **Not covered** | validation layer not installed; solid-block fixtures, not the game's own images; no pane has yet been seen drawing the sheet in the real game (this is the owner test); `icon_button03`, `common_button_red_a` untouched |
+
+### Owner test
+
+Candidate `build/glyph-layout-candidate-20261109/run/xcx`, SHA-256 `5e8fb9589ceb77c41ad31adcc6edec2f8e83e2383eee5b5b832fe0b7a9349159`, built from `generated/upd` (unchanged) with two jobs
+into `build/glyph-inline-trial-6`. Isolated profile `glyph-layout-20261109-01`, a copy of the played disposable profile. Commands and the
+comparison checklist: `build/glyph-layout-candidate-20261109/OWNER-CHECKLIST.md`.

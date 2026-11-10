@@ -1207,53 +1207,72 @@ failed:
     return NULL;
 }
 
-// ---------------------------------------------------------------- inline text-icon atlas (runtime/inline_glyph.h)
-// The shared 368x300 BC7 atlas is never written. For each signature (a set of art choices) one module-owned RGBA8 image of
-// the same size is built on the GPU: the native image is blitted into it, which decodes the BC7 blocks without a CPU
-// decoder (Vulkan requires BLIT_SRC for BC formats), then the licensed tiles are copied over the sixteen verified button
-// cells only. Every other texel, including the compound and non-button symbols, is the native pixel. The images live until
-// shutdown, so copied draw commands may reference them; no native pixel reaches the CPU or any file.
+// ---------------------------------------------------------------- inline text-icon atlas and icon_button sheet (runtime/inline_glyph.h)
+// The shared 368x300 text atlas and the 512x192 icon_button sheet are BC7 images that are never written. For each signature (a
+// layout and a set of art choices) one module-owned RGBA8 image of the same size is built on the GPU: the native image is
+// blitted into it, which decodes the BC7 blocks without a CPU decoder (Vulkan requires BLIT_SRC for BC formats), then the
+// licensed tiles are copied over the verified replaceable cells only. Every other texel is the native pixel. The images live
+// until shutdown, so copied draw commands may reference them; no native pixel reaches the CPU or any file.
+typedef struct { unsigned width, height, cell_w, cell_h, columns, records; const char *name; } InlineGeom;
+static const InlineGeom inline_geoms[INLINE_LAYOUTS] = {
+    {INLINE_ATLAS_W, INLINE_ATLAS_H, INLINE_CELL_W, INLINE_CELL_H, INLINE_COLUMNS, INLINE_RECORDS, "text atlas"},
+    {SHEET_W, SHEET_H, SHEET_CELL, SHEET_CELL, SHEET_COLUMNS, SHEET_RECORDS, "button sheet"},
+    {STICKS_W, STICKS_H, STICKS_CELL, STICKS_CELL, STICKS_COLUMNS, STICKS_RECORDS, "stick-direction image"},
+};
+// The policy symbol a cell of a layout stands for, and its native glyph box.
+static unsigned inline_cell_symbol(int layout, unsigned k) { return layout == INLINE_LAYOUT_STICKS ? SYM_SLV + k : k % SYM_PER_SHEET; }
+static const InlineBox *inline_cell_box(int layout, unsigned k) {
+    return layout == INLINE_LAYOUT_STICKS ? &inline_stick_boxes[k] : layout == INLINE_LAYOUT_SHEET ? &inline_sheet_boxes[k] :
+           &inline_font_boxes[k / SYM_PER_SHEET][k % SYM_PER_SHEET];
+}
 static Tex *inline_image[INLINE_SIGNATURES];
-static uint32_t *inline_cells[INLINE_SIGNATURES];   // packed 46x50 cells; also the unique key memory of the image
+static uint32_t *inline_cells[INLINE_SIGNATURES];   // packed cells; also the unique key memory of the image
 static uint8_t inline_attempted[INLINE_SIGNATURES];
 
-// Snapshot registration identity at recording, like vk_appendage_capture_source. storage is the texture address the guest's
-// own bind entry names; the registered texture at this slot must be the verified atlas at exactly that address.
+// Snapshot registration identity at recording, like vk_appendage_capture_source. For the text atlas storage is the texture
+// address the guest's own bind entry names; the registered texture at this slot must be the verified atlas at exactly that
+// address. The sheet has no such pointer (storage 0): the registered texture's own address is recorded.
 int vk_inline_capture_source(uint64_t handle, uint64_t storage) {
-    int id = (int)(handle & 0xfffff), valid = 0;
+    int id = (int)(handle & 0xfffff), valid = 0, layout = 0;
+    int16_t art[GLYPH_SYMBOLS];
     lock();
-    if (appendage_inline_tagged(handle) && id < ntslots && tslots[id].used) {
+    if (appendage_inline_tagged(handle) && id < ntslots && tslots[id].used &&
+        appendage_inline_signature(appendage_inline_id(handle), art, &layout) && layout >= 0 && layout < INLINE_LAYOUTS) {
         const tex_t *t = &tslots[id].t;
-        if (t->d.width == INLINE_ATLAS_W && t->d.height == INLINE_ATLAS_H && t->d.format == INLINE_NVN_FORMAT &&
-            !tslots[id].has_view && (uint64_t)(uintptr_t)t->mem == storage)
-            valid = appendage_inline_source(handle, t->serial, storage);
+        const InlineGeom *g = &inline_geoms[layout];
+        uint64_t mem = (uint64_t)(uintptr_t)t->mem;
+        if (t->d.width == g->width && t->d.height == g->height && t->d.format == INLINE_NVN_FORMAT && !tslots[id].has_view &&
+            (storage ? mem == storage : layout != INLINE_LAYOUT_FONT))
+            valid = appendage_inline_source(handle, t->serial, mem);
     }
     unlock();
     return valid;
 }
 
-static Tex *inline_upload(unsigned sig, const Tex *native, const int8_t art[INLINE_ACTIONS]) {
+static Tex *inline_upload(unsigned sig, const Tex *native, int layout, const int16_t art[GLYPH_SYMBOLS]) {
     if (inline_attempted[sig]) return inline_image[sig];
     if (!native->uploaded) return NULL;   // its upload is not recorded yet; a later resolution retries
     inline_attempted[sig] = 1;
     VkCtx *c = vk_ctx();
-    const size_t cell_bytes = INLINE_CELL_W * INLINE_CELL_H * 4;
-    uint32_t *cells = appendage_glyph_failure("pixels") ? NULL : calloc(INLINE_CELLS, cell_bytes);
+    const InlineGeom *g = &inline_geoms[layout];
+    const size_t cell_bytes = (size_t)g->cell_w * g->cell_h * 4;
+    uint32_t *cells = appendage_glyph_failure("pixels") ? NULL : calloc(g->records, cell_bytes);
     if (!cells) { appendage_glyph_note_fallback(); return NULL; }
-    VkBufferImageCopy regions[INLINE_CELLS];
+    VkBufferImageCopy regions[INLINE_MAX_CELLS];
     unsigned n = 0;
-    for (unsigned k = 0; k < INLINE_CELLS; k++) {
-        const InlineCell *cell = &inline_cells_geom[k];
-        int a = art[cell->action];
-        if (a < 0) continue;
-        uint32_t *dst = cells + (size_t)n * INLINE_CELL_W * INLINE_CELL_H;
-        if (!glyph_art_inline_cell((unsigned)a, cell->x, cell->y, cell->w, cell->h, dst)) { free(cells); appendage_glyph_note_fallback(); return NULL; }
-        regions[n] = (VkBufferImageCopy){.bufferOffset = (VkDeviceSize)n * cell_bytes, .bufferRowLength = INLINE_CELL_W,
-                                         .bufferImageHeight = INLINE_CELL_H,
+    for (unsigned k = 0; k < g->records; k++) {
+        unsigned sym = inline_cell_symbol(layout, k);
+        int a = art[sym];
+        if (a < 0 || !inline_symbol_replaceable(sym)) continue;
+        const InlineBox *box = inline_cell_box(layout, k);
+        uint32_t *dst = cells + (size_t)n * g->cell_w * g->cell_h;
+        if (!glyph_art_cell((unsigned)a, (int)g->cell_w, (int)g->cell_h, box->x, box->y, box->w, box->h, dst)) { free(cells); appendage_glyph_note_fallback(); return NULL; }
+        regions[n] = (VkBufferImageCopy){.bufferOffset = (VkDeviceSize)n * cell_bytes, .bufferRowLength = g->cell_w,
+                                         .bufferImageHeight = g->cell_h,
                                          .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                                         .imageOffset = {(int32_t)(cell->record % INLINE_COLUMNS) * INLINE_CELL_W,
-                                                         (int32_t)(cell->record / INLINE_COLUMNS) * INLINE_CELL_H, 0},
-                                         .imageExtent = {INLINE_CELL_W, INLINE_CELL_H, 1}};
+                                         .imageOffset = {(int32_t)(k % g->columns) * (int32_t)g->cell_w,
+                                                         (int32_t)(k / g->columns) * (int32_t)g->cell_h, 0},
+                                         .imageExtent = {g->cell_w, g->cell_h, 1}};
         n++;
     }
     if (!n) { free(cells); return NULL; }
@@ -1266,7 +1285,7 @@ static Tex *inline_upload(unsigned sig, const Tex *native, const int8_t art[INLI
     if (!blit_ok || appendage_glyph_failure("blit")) { free(cells); appendage_glyph_note_fallback(); return NULL; }
     static pool_t pool = {.flags = NVN_MEMORY_POOL_FLAGS_CPU_CACHED};
     tex_t t = {.d = {.target = NVN_TEXTURE_TARGET_2D, .format = 0x25, .flags = NVN_TEXTURE_FLAGS_LINEAR,
-                     .width = INLINE_ATLAS_W, .height = INLINE_ATLAS_H, .depth = 1, .levels = 1, .stride = INLINE_ATLAS_W * 4},
+                     .width = g->width, .height = g->height, .depth = 1, .levels = 1, .stride = g->width * 4},
                .mem = (uint8_t *)cells, .pool = &pool};
     nvn_tex_layout(&t.d, &t.L);
     TexKey key;
@@ -1288,8 +1307,8 @@ static Tex *inline_upload(unsigned sig, const Tex *native, const int8_t art[INLI
     VkCommandBuffer cb = vk_upload_begin();
     init_image(e, cb);
     barrier(cb, ALL_RW, ALL_RW);   // the native image's upload, recorded earlier in this batch or a previous one
-    VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {INLINE_ATLAS_W, INLINE_ATLAS_H, 1}},
-                        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{0, 0, 0}, {INLINE_ATLAS_W, INLINE_ATLAS_H, 1}}};
+    VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {(int32_t)g->width, (int32_t)g->height, 1}},
+                        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{0, 0, 0}, {(int32_t)g->width, (int32_t)g->height, 1}}};
     vkCmdBlitImage(cb, native->pub.image, VK_IMAGE_LAYOUT_GENERAL, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_NEAREST);
     barrier(cb, ALL_RW, ALL_RW);
     vkCmdCopyBufferToImage(cb, buffer, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, n, regions);
@@ -1300,14 +1319,14 @@ static Tex *inline_upload(unsigned sig, const Tex *native, const int8_t art[INLI
     e->uploaded = 1;
     inline_cells[sig] = cells;
     inline_image[sig] = e;
-    rt_log("inline glyph: owned atlas %u built: %u button cells replaced, native pixels elsewhere (368x300 RGBA)", sig + 1, n);
+    rt_log("inline glyph: owned %s %u built: %u cells replaced, native pixels elsewhere (%ux%u RGBA)", g->name, sig + 1, n, g->width, g->height);
     return e;
 failed:
     if (buffer) vmaDestroyBuffer(c->vma, buffer, allocation);
     destroy_tex(e);
     free(cells);
     appendage_glyph_note_fallback();
-    rt_log("inline glyph: optional atlas build failed; native icons kept");
+    rt_log("inline glyph: optional %s build failed; native icons kept", g->name);
     return NULL;
 }
 
@@ -1317,15 +1336,17 @@ const VkTexImage *vk_appendage_texture_locked(uint64_t handle, view_t *view, int
     if (appendage_inline_tagged(handle) && original && id < ntslots) {
         const tex_t *t = &tslots[id].t;
         unsigned sig = appendage_inline_id(handle);
-        int8_t art[INLINE_ACTIONS];
-        if (!sig || sig > INLINE_SIGNATURES || t->d.width != INLINE_ATLAS_W || t->d.height != INLINE_ATLAS_H ||
+        int16_t art[GLYPH_SYMBOLS];
+        int layout = 0;
+        if (!sig || sig > INLINE_SIGNATURES || !appendage_inline_signature(sig, art, &layout) || layout < 0 || layout >= INLINE_LAYOUTS ||
+            t->d.width != inline_geoms[layout].width || t->d.height != inline_geoms[layout].height ||
             t->d.format != INLINE_NVN_FORMAT || tslots[id].has_view || appendage_glyph_failure("source") ||
-            !appendage_inline_source(handle, t->serial, (uint64_t)(uintptr_t)t->mem) || !appendage_inline_signature(sig, art)) {
+            !appendage_inline_source(handle, t->serial, (uint64_t)(uintptr_t)t->mem)) {
             appendage_glyph_note_fallback();
             return original;
         }
-        // The slot's own view and swizzle selection stay as resolved for the native image: the owned atlas is sampled the same way.
-        Tex *e = inline_upload(sig - 1, (const Tex *)original, art);
+        // The slot's own view and swizzle selection stay as resolved for the native image: the owned image is sampled the same way.
+        Tex *e = inline_upload(sig - 1, (const Tex *)original, layout, art);
         return e ? &e->pub : original;
     }
     if (!appendage_glyph_tagged(handle) || !original || id >= ntslots) return original;
