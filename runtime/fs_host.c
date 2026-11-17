@@ -681,6 +681,11 @@ void fs_host_set_profile(const char *dir) {
     need(dir && snprintf(profile, sizeof profile, "%s", dir) < (int)sizeof profile, "profile path");
 }
 
+int fs_host_profile_file(const char *name, char *out, size_t cap) {
+    if (!plat_cas32(&storage_ready, 0, 0) || !*profile) return 0;
+    return snprintf(out, cap, "%s/%s", profile, name) < (int)cap;
+}
+
 // ---- mounts and paths
 static uint32_t mount_add(const char *name, int kind, const char *root) {
     if (!name || !*name || strlen(name) >= 32 || strchr(name, ':') || strchr(name, '/')) return FS_R_INVALID_ARGUMENT;

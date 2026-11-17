@@ -200,6 +200,8 @@ change passes these, all run with `.venv`:
 | `tests\excl_mt.py` | the exclusive monitor helpers under contention and ABA, on several threads | no |
 | `tests\jumptables_check.py` | `recomp/jumptables.py` against a Unicorn oracle; must report 0 disagreements, on 1.4.3 too | yes |
 
+Screens are checked by replaying button presses and saving pictures of the window: [ui-testing.md](ui-testing.md).
+
 Runtime probes, each a mode of `xcx.exe` (the list is at the top of `runtime/main.c`): `--probe-kernel`,
 `--probe-vkexec`, `--probe-nvn-tex` and `--probe-shader` cover most runtime changes. `--probe-cheats` checks the cheat
 format and interpreter ([cheats.md](cheats.md)).

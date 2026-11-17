@@ -6,10 +6,26 @@
 
 #include "cpu.h"
 #include "host.h"
+#include "swkbd.h"
 
 // save_pages.c calls the guest through these; the checks below never reach them.
 uint64_t rt_call(Cpu *c, uint64_t fn, int n, ...) { (void)c, (void)fn, (void)n; return 0; }
 void rt_log(const char *fmt, ...) { (void)fmt; }
+// The name entry and the profile file are not reached by the checks below, except the file's text through these.
+static char file_text[2048];
+int fs_host_profile_file(const char *name, char *out, size_t cap) { return snprintf(out, cap, "/profile/%s", name) < (int)cap; }
+uint8_t *plat_file_read(const char *path, uint64_t *size) { (void)path, (void)size; return NULL; }
+int plat_file_write_atomic(const char *path, const void *data, size_t n) {
+    (void)path;
+    snprintf(file_text, sizeof file_text, "%.*s", (int)n, (const char *)data);
+    return 1;
+}
+int text_entry_run(const SwkbdRequest *req, uint16_t *out, size_t cap, size_t *n) { (void)req, (void)out, (void)cap; *n = 0; return 0; }
+size_t swkbd_utf8_to_utf16(const char *s, uint16_t *out, size_t cap) { size_t n = 0; while (s[n] && n < cap) out[n] = (uint8_t)s[n], n++; return n; }
+size_t swkbd_utf16_to_utf8(const uint16_t *s, size_t n, char *out, size_t cap) { size_t i = 0; for (; i < n && i + 1 < cap; i++) out[i] = (char)s[i]; out[i] = 0; return i; }
+void input_block(int on) { (void)on; }
+int kern_core_away(void) { return 0; }
+void kern_core_back(int *away) { (void)away; }
 
 #include "../runtime/save_pages.c"
 
@@ -60,6 +76,57 @@ int main(void) {
     save_pages_set(1);
     save_pages_label(label, sizeof label);
     CHECK(!strcmp(label, "Page 2/10"), "label '%s'", label);
+
+    // page names
+    char nm[SAVE_PAGE_NAME_MAX * 4 + 1];
+    save_pages_name(2, nm, sizeof nm);
+    CHECK(!strcmp(nm, "Page 3") && !save_pages_has_name(2), "an unnamed page is 'Page N': '%s'", nm);
+    CHECK(save_pages_set_name(2, "Mods run"), "naming is a change");
+    CHECK(!save_pages_set_name(2, "Mods run"), "the same name is not");
+    save_pages_name(2, nm, sizeof nm);
+    CHECK(!strcmp(nm, "Mods run") && save_pages_has_name(2), "named '%s'", nm);
+    save_pages_set_name(3, "  Lin [ST:icon p1=l] \t\x01 ");
+    save_pages_name(3, nm, sizeof nm);
+    CHECK(!strcmp(nm, "Lin ST:icon p1=l"), "brackets, controls and the ends are dropped: '%s'", nm);
+    save_pages_set_name(4, "abcdefghijklmnopqrstuvwxyz0123456789");
+    save_pages_name(4, nm, sizeof nm);
+    CHECK(strlen(nm) == SAVE_PAGE_NAME_MAX, "cut at %d characters: '%s'", SAVE_PAGE_NAME_MAX, nm);
+    save_pages_set_name(5, "\xc3\xa9\xc3\xa9\xc3");   // two whole characters, then a cut one
+    save_pages_name(5, nm, sizeof nm);
+    CHECK(!strcmp(nm, "\xc3\xa9\xc3\xa9"), "a cut character is dropped: '%s'", nm);
+    save_pages_set_name(6, "\xe3\x83\x9e\xe3\x83\x83");   // multi-byte characters count as characters
+    save_pages_name(6, nm, sizeof nm);
+    CHECK(!strcmp(nm, "\xe3\x83\x9e\xe3\x83\x83"), "UTF-8 kept: '%s'", nm);
+    CHECK(save_pages_set_name(2, "") && !save_pages_has_name(2), "empty text takes the name away");
+    CHECK(!save_pages_set_name(-1, "x") && !save_pages_set_name(SAVE_PAGE_COUNT, "x"), "no such page");
+
+    char text[1024];
+    size_t len = save_pages_names_format(text, sizeof text);
+    CHECK(len && !strstr(text, "\n3\t") && !strncmp(text, "4\tLin ST:icon p1=l\n5\t", 21), "format: '%s'", text);
+    for (int i = 0; i < SAVE_PAGE_COUNT; i++) save_pages_set_name(i, "");
+    save_pages_names_parse("2\tMods run\r\n11\tout of range\n0\tnone\nbad line\n10\tChar: Elma\n");
+    save_pages_name(1, nm, sizeof nm);
+    CHECK(!strcmp(nm, "Mods run"), "parsed page 2: '%s'", nm);
+    save_pages_name(9, nm, sizeof nm);
+    CHECK(!strcmp(nm, "Char: Elma"), "parsed page 10: '%s'", nm);
+    CHECK(!save_pages_has_name(0) && !save_pages_has_name(2), "lines out of range or malformed set nothing");
+    save_pages_set_name(1, "Round trip");
+    save_pages_names_format(text, sizeof text);
+    for (int i = 0; i < SAVE_PAGE_COUNT; i++) save_pages_set_name(i, "");
+    save_pages_names_parse(text);
+    save_pages_name(1, nm, sizeof nm);
+    CHECK(!strcmp(nm, "Round trip"), "a saved name reads back: '%s'", nm);
+
+    // centring: a wider name needs fewer blanks before it, and none goes out of range
+    char sp1[MAX_SPACES + 1], sp2[MAX_SPACES + 1], sp3[MAX_SPACES + 1];
+    name_spacer("Te", sp1, sizeof sp1);
+    name_spacer("Page 4", sp2, sizeof sp2);
+    name_spacer("WWWWWWWWWWWWWWWWWWWWWWWW", sp3, sizeof sp3);
+    CHECK(strlen(sp1) > strlen(sp2) && strlen(sp2) > strlen(sp3), "blanks %zu %zu %zu", strlen(sp1), strlen(sp2), strlen(sp3));
+    name_spacer("", sp1, sizeof sp1);
+    CHECK(strlen(sp1) <= MAX_SPACES && strspn(sp1, " ") == strlen(sp1), "an empty name stays in range");
+    name_spacer("\xe4\xb8\xad\xe3\x81\x82\xe4\xb8\xad\xe3\x81\x82", sp2, sizeof sp2);
+    CHECK(strlen(sp2) > 0 && strlen(sp2) < strlen(sp1), "full-width characters count as wide");
 
     puts(fails ? "save_pages_check: FAILED" : "save_pages_check: ok");
     return fails != 0;

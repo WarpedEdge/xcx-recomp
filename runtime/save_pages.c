@@ -2,10 +2,15 @@
 #include "save_pages.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cpu.h"
+#include "fs.h"
 #include "host.h"
+#include "input.h"
+#include "swkbd.h"
+#include "platform/platform.h"
 
 static volatile int page;   // read by guest threads (fs_host.c), written by the Save/Load screen's thread
 
@@ -24,6 +29,88 @@ int save_pages_step(int delta) {
 
 void save_pages_label(char *out, size_t cap) {
     snprintf(out, cap, "Page %d/%d", save_pages_current() + 1, SAVE_PAGE_COUNT);
+}
+
+// ---- page names
+static char names[SAVE_PAGE_COUNT][SAVE_PAGE_NAME_MAX * 4 + 1];   // UTF-8; empty = not named
+static int names_loaded;
+
+int save_pages_has_name(int page) { return page >= 0 && page < SAVE_PAGE_COUNT && names[page][0]; }
+
+void save_pages_name(int page, char *out, size_t cap) {
+    if (save_pages_has_name(page)) snprintf(out, cap, "%s", names[page]);
+    else snprintf(out, cap, "Page %d", page + 1);
+}
+
+int save_pages_set_name(int page, const char *utf8) {
+    if (page < 0 || page >= SAVE_PAGE_COUNT) return 0;
+    char clean[sizeof names[0]];
+    size_t o = 0;
+    int chars = 0;
+    for (const unsigned char *p = (const unsigned char *)(utf8 ? utf8 : ""); *p && chars < SAVE_PAGE_NAME_MAX;) {
+        size_t k = *p < 0x80 ? 1 : *p >= 0xf0 ? 4 : *p >= 0xe0 ? 3 : *p >= 0xc0 ? 2 : 1;
+        int whole = *p < 0x80 || (*p >= 0xc0 && k > 1);   // a stray continuation byte is not a character
+        for (size_t i = 1; i < k && whole; i++) if ((p[i] & 0xc0) != 0x80) { whole = 0, k = i; }
+        if (!whole || *p < 0x20 || *p == 0x7f || *p == '[' || *p == ']') { p += k; continue; }
+        if (o + k >= sizeof clean) break;
+        memcpy(clean + o, p, k);
+        o += k, p += k, chars++;
+    }
+    while (o && clean[o - 1] == ' ') o--;   // no spaces at the ends
+    clean[o] = 0;
+    size_t lead = strspn(clean, " ");
+    memmove(clean, clean + lead, o - lead + 1);
+    if (!strcmp(clean, names[page])) return 0;
+    snprintf(names[page], sizeof names[page], "%s", clean);
+    return 1;
+}
+
+void save_pages_names_parse(const char *text) {
+    for (const char *line = text; line && *line;) {
+        const char *end = strchr(line, '\n');
+        size_t len = end ? (size_t)(end - line) : strlen(line);
+        char buf[SAVE_PAGE_NAME_MAX * 4 + 16];
+        if (len < sizeof buf) {
+            memcpy(buf, line, len), buf[len] = 0;
+            if (len && buf[len - 1] == '\r') buf[len - 1] = 0;
+            char *tab = strchr(buf, '\t');
+            int page = atoi(buf);
+            if (tab && page >= 1 && page <= SAVE_PAGE_COUNT) save_pages_set_name(page - 1, tab + 1);
+        }
+        line = end ? end + 1 : NULL;
+    }
+}
+
+size_t save_pages_names_format(char *out, size_t cap) {
+    size_t o = 0;
+    for (int i = 0; i < SAVE_PAGE_COUNT; i++) {
+        if (!names[i][0]) continue;
+        int w = snprintf(out + o, cap - o, "%d\t%s\n", i + 1, names[i]);
+        if (w < 0 || (size_t)w >= cap - o) break;
+        o += (size_t)w;
+    }
+    return o;
+}
+
+#define NAMES_FILE "save-pages.txt"
+
+static void names_load(void) {   // once, when the screen first needs a name
+    if (names_loaded) return;
+    char path[1200];
+    if (!fs_host_profile_file(NAMES_FILE, path, sizeof path)) return;   // storage not up yet: try again later
+    names_loaded = 1;
+    uint64_t size;
+    uint8_t *data = plat_file_read(path, &size);
+    if (!data) return;
+    save_pages_names_parse((const char *)data);
+    free(data);
+}
+
+static void names_save(void) {
+    char path[1200], text[SAVE_PAGE_COUNT * (SAVE_PAGE_NAME_MAX * 4 + 8) + 1];
+    if (!fs_host_profile_file(NAMES_FILE, path, sizeof path)) return;
+    size_t n = save_pages_names_format(text, sizeof text);
+    if (!plat_file_write_atomic(path, text, n)) rt_log("save pages: cannot write %s", path);
 }
 
 int save_pages_remap_path(const char *rest, char *out, size_t cap) {
@@ -61,29 +148,77 @@ void save_pages_reload(uint64_t scene) {
 }
 
 // The game's button bits in the mask of buttons pressed this frame.
-enum { PAD_L = 0x10, PAD_R = 0x20 };
+enum { PAD_Y = 0x01, PAD_L = 0x10, PAD_R = 0x20 };
 static int sound_pending;   // a page change waits for rt_save_pages_update to play its sound
+static int title_dirty;     // the page's name changed: rt_save_pages_update draws the title again
 // The game's sound effect queue: the manager's accessor and the request (manager, effect, 0). Effect 5 is the one the
 // game's own screens play when L or R switches a tab or page.
 #define MAIN 0x7000000000ull
 enum { F_SOUND_MANAGER = 0x208554, F_PLAY_SOUND = 0x40bc48, SOUND_TAB_SWITCH = 5 };
 
+// The name entry: the host's text entry the game's character naming uses, shown over the game while this guest thread
+// waits in it (the virtual core given up, the game's input blocked), as swkbd.c does for the game's own request.
+static void rename_page(void) {
+    static SwkbdRequest req;
+    int page = save_pages_current();
+    char current[SAVE_PAGE_NAME_MAX * 4 + 1] = "";
+    if (save_pages_has_name(page)) save_pages_name(page, current, sizeof current);
+    memset(&req, 0, sizeof req);
+    swkbd_utf8_to_utf16("Enter a name for this page.", req.prompt, sizeof req.prompt / sizeof *req.prompt - 1);
+    swkbd_utf8_to_utf16(current, req.initial, KB_LIMIT);
+    req.max_len = SAVE_PAGE_NAME_MAX;   // no minimum: an empty name puts "Page N" back
+    uint16_t answer[KB_LIMIT * 2 + 1];
+    size_t n = 0;
+    int away = kern_core_away();
+    input_block(1);
+    int confirmed = text_entry_run(&req, answer, KB_LIMIT * 2, &n);
+    input_block(0);
+    kern_core_back(&away);
+    if (!confirmed) return;
+    char utf8[KB_LIMIT * 6 + 1];
+    swkbd_utf16_to_utf8(answer, n, utf8, sizeof utf8);
+    if (save_pages_set_name(page, utf8)) {
+        names_save();
+        title_dirty = 1;
+    }
+    rt_log("save pages: page %d is now \"%s\"", page + 1, utf8);
+}
+
+static int rename_cooldown;   // hook calls (one per frame) that ignore Y after a name entry: the press that opened it is
+                              // still the one the screen reports on the frame the entry returns
+
 void rt_save_pages_pad(uint64_t scene, uint32_t pad) {
+    names_load();
+    if (rename_cooldown > 0) {
+        rename_cooldown--;
+        pad &= ~(uint32_t)PAD_Y;
+    }
     int delta = pad & PAD_R ? 1 : pad & PAD_L ? -1 : 0;
     if (pad & PAD_L && pad & PAD_R) delta = 0;
     if (delta && save_pages_step(delta)) {
         save_pages_reload(scene);
         sound_pending = 1;
+    } else if (pad & PAD_Y && !(pad & (PAD_L | PAD_R))) {
+        rename_page();
+        rename_cooldown = 30;
     }
 }
 
+static void title_label(Cpu *c);
+
 void rt_save_pages_update(Cpu *c) {
-    if (!sound_pending) return;
-    sound_pending = 0;
+    if (!sound_pending && !title_dirty) return;
     uint64_t saved[19];
     memcpy(saved, c->x, sizeof saved);
-    uint64_t sound = rt_call(c, MAIN + F_SOUND_MANAGER, 0);
-    if (sound) rt_call(c, MAIN + F_PLAY_SOUND, 3, sound, SOUND_TAB_SWITCH, 0);
+    if (sound_pending) {
+        sound_pending = 0;
+        uint64_t sound = rt_call(c, MAIN + F_SOUND_MANAGER, 0);
+        if (sound) rt_call(c, MAIN + F_PLAY_SOUND, 3, sound, SOUND_TAB_SWITCH, 0);
+    }
+    if (title_dirty) {
+        title_dirty = 0;
+        title_label(c);
+    }
     memcpy(c->x, saved, sizeof saved);
 }
 
@@ -109,7 +244,64 @@ enum { F_EMPTY_CALLER_END = 0x665bb8, S_EMPTY_LABEL = 0x17c6589, S_EMPTY_LABEL2 
 // row's second widget group (one per row from EMPTY_GROUPS). The first row's text is kept, so each empty row can show
 // it with the slot number after it in whatever language the game runs in.
 
+// The screen frame sets its title through main+0x55f548 (layout handle, child name, message). Its layout also holds
+// spare text panes beside the title, rect_TextTitle02 and rect_TextTitle03, that the Save and Load screens leave empty:
+// the page's name goes into the second. The layout places that pane right after the first by the width of the first's
+// text, and the first sits lower, so it gets blanks that carry the name across the slash into the empty part of the title
+// bar, as many as put the name in the middle of it. The layout handle is kept when the title is found, as {layout object,
+// part index}, the form the game's find-child call takes.
+static struct { uint64_t layout; uint32_t idx; } last_label;   // the handle of the label being set
+static uint64_t frame_handle[2];                                // the title's handle, once found
+static const char SPACER_PANE[] = "rect_TextTitle02", NAME_PANE[] = "rect_TextTitle03";
+
+// Where the name goes, in the layout's own pixels at 1920 wide as measured on screenshots: the second pane starts
+// NAME_BASE after the layout's left edge when the first holds no text, and every blank space in the first moves it by
+// SPACE_WIDTH. BOX_CENTER is the middle of the empty part of the title bar. NAME_UNITS gives a name's width the same
+// way, as an estimate by kind of character (the game's font is proportional; only a few widths were measured: W 25,
+// lower case about 12.5, capitals about 17, digits about 21, space 9.1).
+enum { NAME_BASE = 355, BOX_CENTER = 1018, MAX_SPACES = 90 };
+static const float SPACE_WIDTH = 9.1f;
+
+static float name_width(const char *s) {
+    float w = 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p;) {
+        unsigned cp = *p, k = 1;
+        if (cp >= 0xf0) cp = (cp & 7), k = 4;
+        else if (cp >= 0xe0) cp = (cp & 15), k = 3;
+        else if (cp >= 0xc0) cp = (cp & 31), k = 2;
+        for (unsigned i = 1; i < k && p[i]; i++) cp = cp << 6 | (p[i] & 63);
+        p += k;
+        if (cp == ' ') w += 9.1f;
+        else if (strchr("iljtfr.,;:!|'`", (int)cp) && cp < 128) w += 7.5f;
+        else if (strchr("mwMW@%", (int)cp) && cp < 128) w += 23.0f;
+        else if (cp >= '0' && cp <= '9') w += 21.0f;
+        else if (cp >= 'A' && cp <= 'Z') w += 17.0f;
+        else if (cp >= 'a' && cp <= 'z') w += 12.5f;
+        else if (cp < 0x2e80) w += cp < 128 ? 11.0f : 14.0f;
+        else w += 34.0f;   // full-width characters
+    }
+    return w;
+}
+
+// The blanks that carry a name of this text across to the middle of the box, so it reads as centred.
+static void name_spacer(const char *name, char *out, size_t cap) {
+    int n = (int)((BOX_CENTER - NAME_BASE - name_width(name) / 2) / SPACE_WIDTH + 0.5f);
+    if (n < 0) n = 0;
+    if (n > MAX_SPACES) n = MAX_SPACES;
+    if ((size_t)n >= cap) n = (int)cap - 1;
+    memset(out, ' ', (size_t)n);
+    out[n] = 0;
+}
+
+void rt_save_pages_label_entry(Cpu *c) {
+    if (title.state != TITLE_ARMED) return;
+    uint64_t h = c->x[0];
+    last_label.layout = h ? LD64(h) : 0;
+    last_label.idx = h ? LD32(h + 8) : 0;
+}
+
 void rt_save_pages_open(void) {
+    names_load();
     title.state = TITLE_ARMED;
     title.widget = 0;
 }
@@ -120,17 +312,30 @@ void rt_save_pages_text(Cpu *c) {
         snprintf(title.empty, sizeof title.empty, "%.*s", (int)sizeof title.empty - 1, (const char *)(uintptr_t)str);
     if (title.state != TITLE_ARMED || title.busy || str < 0x10000 || c->x[30] != MAIN + F_TEXT_CALLER_END) return;
     title.widget = c->x[0];
+    frame_handle[0] = last_label.layout, frame_handle[1] = last_label.idx;
     snprintf(title.text, sizeof title.text, "%.*s", (int)sizeof title.text - 1, (const char *)(uintptr_t)str);
     title.state = TITLE_HAVE;
 }
 
 static void title_label(Cpu *c) {
     if (title.state != TITLE_HAVE) return;
-    char page[24], label[160];
+    char page[24], name[SAVE_PAGE_NAME_MAX * 4 + 1], label[160];
     save_pages_label(page, sizeof page);
+    save_pages_name(save_pages_current(), name, sizeof name);
     snprintf(label, sizeof label, "%s   [ST:icon p1=l] %s [ST:icon p1=r]", title.text, page);
     title.busy = 1;
     rt_call(c, MAIN + F_SET_TEXT, 2, title.widget, (uint64_t)(uintptr_t)label);
+    for (int k = 0; k < 2 && frame_handle[0]; k++) {
+        char spacer[MAX_SPACES + 1];
+        name_spacer(name, spacer, sizeof spacer);
+        const char *pane_name = k ? NAME_PANE : SPACER_PANE, *text = k ? name : spacer;
+        uint64_t pane = rt_call(c, MAIN + F_FIND_CHILD, 2, (uint64_t)(uintptr_t)frame_handle, (uint64_t)(uintptr_t)pane_name);
+        uint64_t t = pane ? rt_call(c, MAIN + F_AS_TEXT, 1, pane) : 0;
+        if (t) {
+            rt_call(c, MAIN + F_SET_TEXT, 2, t, (uint64_t)(uintptr_t)text);
+            rt_call(c, LD64(LD64(t) + 0x20), 2, t, 1);   // virtual +0x20: show
+        }
+    }
     title.busy = 0;
 }
 
