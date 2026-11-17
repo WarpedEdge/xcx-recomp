@@ -38,3 +38,8 @@ void rt_save_pages_rows(struct Cpu *c);
 // every language.
 void rt_save_pages_open(void);
 void rt_save_pages_text(struct Cpu *c);
+
+// Called at the start of the screen's update, once per frame (c->x[0] is the screen object): plays the page change
+// sound the frame after the pad hook asked for it. The pad hook runs inside a function whose registers live in
+// locals, where a call into the game is not safe; here every register is still in the Cpu. Leaves them as found.
+void rt_save_pages_update(struct Cpu *c);

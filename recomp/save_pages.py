@@ -11,8 +11,10 @@ SHA256 = '0a9dbf1f3816dd0fab0a08883d538c74d9b9fd7d939cb29aaf0947d71a201026'
 PAD_SITE = 0x6661c0   # mov w9, #0x1000: the first instruction after `orr w8, w0, w20` (0x6661bc)
 ROWS_ENTRY = 0x6665c0   # the function that fills the rows' widgets from their loaded data; X0 is the screen object
 OPEN_ENTRY = 0x6654a0   # the screen's constructor; X0 is the new screen object
+UPDATE_ENTRY = 0x6660a0   # the screen's update, once per frame; X0 is the screen object
 TEXT_ENTRY = 0x916d44   # the text widget's string setter every label goes through: X0 widget, X1 UTF-8 string
-WORDS = {0x6661bc: 0x2a140008, PAD_SITE: 0x52820009, ROWS_ENTRY: 0xd10703ff, OPEN_ENTRY: 0xd10243ff, TEXT_ENTRY: 0xd101c3ff}
+WORDS = {0x6661bc: 0x2a140008, PAD_SITE: 0x52820009, ROWS_ENTRY: 0xd10703ff, OPEN_ENTRY: 0xd10243ff, TEXT_ENTRY: 0xd101c3ff,
+         UPDATE_ENTRY: 0xa9bc7bfd}
 
 
 def verified(mod):
@@ -38,6 +40,8 @@ def entry(mod, address):
     offset = address - mod.base
     if offset == ROWS_ENTRY:
         return 'rt_save_pages_rows(c);'
+    if offset == UPDATE_ENTRY:
+        return 'rt_save_pages_update(c);'
     if offset == OPEN_ENTRY:
         return 'rt_save_pages_open();'
     if offset == TEXT_ENTRY:

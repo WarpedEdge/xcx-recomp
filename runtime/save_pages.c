@@ -62,17 +62,34 @@ void save_pages_reload(uint64_t scene) {
 
 // The game's button bits in the mask of buttons pressed this frame.
 enum { PAD_L = 0x10, PAD_R = 0x20 };
+static int sound_pending;   // a page change waits for rt_save_pages_update to play its sound
+// The game's sound effect queue: the manager's accessor and the request (manager, effect, 0). Effect 5 is the one the
+// game's own screens play when L or R switches a tab or page.
+#define MAIN 0x7000000000ull
+enum { F_SOUND_MANAGER = 0x208554, F_PLAY_SOUND = 0x40bc48, SOUND_TAB_SWITCH = 5 };
 
 void rt_save_pages_pad(uint64_t scene, uint32_t pad) {
     int delta = pad & PAD_R ? 1 : pad & PAD_L ? -1 : 0;
     if (pad & PAD_L && pad & PAD_R) delta = 0;
-    if (delta && save_pages_step(delta)) save_pages_reload(scene);
+    if (delta && save_pages_step(delta)) {
+        save_pages_reload(scene);
+        sound_pending = 1;
+    }
+}
+
+void rt_save_pages_update(Cpu *c) {
+    if (!sound_pending) return;
+    sound_pending = 0;
+    uint64_t saved[19];
+    memcpy(saved, c->x, sizeof saved);
+    uint64_t sound = rt_call(c, MAIN + F_SOUND_MANAGER, 0);
+    if (sound) rt_call(c, MAIN + F_PLAY_SOUND, 3, sound, SOUND_TAB_SWITCH, 0);
+    memcpy(c->x, saved, sizeof saved);
 }
 
 // Game functions that find a child widget by name, take it as a text widget and set its string (the row code at
 // main+0x6665c0 does the same for the date), and the name of the label that marks the auto save row. Every row has
 // one; the manual rows keep theirs hidden, and this code shows it with the slot number.
-#define MAIN 0x7000000000ull
 enum { F_FIND_CHILD = 0x55f16c, F_AS_TEXT = 0x915110, F_SET_TEXT = 0x91720c, S_TYPE_LABEL = 0x17ce2ee };
 enum { ROW_GROUPS = 0xd8, ROW_GROUP_SIZE = 0x10 };   // per row: a widget handle that holds that row's labels
 
@@ -111,7 +128,7 @@ static void title_label(Cpu *c) {
     if (title.state != TITLE_HAVE) return;
     char page[24], label[160];
     save_pages_label(page, sizeof page);
-    snprintf(label, sizeof label, "%s   %s", title.text, page);
+    snprintf(label, sizeof label, "%s   [ST:icon p1=l] %s [ST:icon p1=r]", title.text, page);
     title.busy = 1;
     rt_call(c, MAIN + F_SET_TEXT, 2, title.widget, (uint64_t)(uintptr_t)label);
     title.busy = 0;

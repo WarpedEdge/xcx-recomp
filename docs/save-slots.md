@@ -5,7 +5,8 @@ The game's Save and Load screens show the auto save and three manual slots. Page
 ## What the player sees
 
 - L and R change the page while the screen is idle (rows loaded, no message open). The page wraps around.
-- The screen title ends with the page, for example `<title>   Page 2/10`.
+- The screen title ends with the page between the game's own L and R button icons, for example `<title>   [L] Page 2/10 [R]`. The icons are drawn by the game's inline icon text, so they follow the controller style the game uses elsewhere.
+- A page change plays the sound the game's own screens play when L or R switches a tab.
 - Each manual row shows its slot number in the corner where the auto save row has its label (`No. 04`). An empty row shows the number after its usual "no save" text.
 - The auto save is one slot for every page. Continue on the title screen always loads it.
 - The page is kept until the game closes. A new run starts on page 1, which is the game's own slots 01 to 03.
@@ -22,10 +23,11 @@ The hooks are emitted by the generator for the 2.0.0 `main` only, and only when 
 | --- | --- | --- |
 | `0x6661c0` | `rt_save_pages_pad` | the buttons pressed this frame, L and R change the page |
 | `0x6665c0` (entry) | `rt_save_pages_rows` | slot numbers on the rows, page in the title |
+| `0x6660a0` (entry) | `rt_save_pages_update` | plays the page change sound the frame after the pad hook asked for it |
 | `0x6654a0` (entry) | `rt_save_pages_open` | a screen was built: look for its title next |
 | `0x916d44` (entry) | `rt_save_pages_text` | takes the title widget and the empty-row text when the game sets them |
 
-The title and the labels are set with the game's own text functions (`rt_call`), so they use the game's font. They are English in every language.
+The title and the labels are set with the game's own text functions (`rt_call`), so they use the game's font. They are English in every language. The sound is the effect the game requests as `(manager, 5, 0)` through the sound request at `main+0x40bc48`, the one its own L/R tab screens use.
 
 ## Limits
 
