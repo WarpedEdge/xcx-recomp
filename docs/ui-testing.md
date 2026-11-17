@@ -1,6 +1,6 @@
 # Testing UI changes by script and screenshot
 
-A change to a game screen can be checked without a hand on the controller: replay presses with `XCX_INPUT_SCRIPT`, save pictures of the window with `XCX_SHOTS`, and look at them. The save slot pages ([save-slots.md](save-slots.md)) were checked this way on Linux: page changes, the page name, the text entry and the controller icon styles.
+A change to a game screen can be checked without a hand on the controller: replay presses with `XCX_INPUT_SCRIPT`, save pictures of the window with `XCX_SHOTS`, and look at them. The save slot pages ([save-slots.md](save-slots.md)) were checked this way on Linux: page changes, the page name, the text entry and the controller icon styles. [ui-widgets.md](ui-widgets.md) is the reference for what a hook can change on a screen.
 
 Use a disposable profile (a copy of saves in a folder of its own, passed with `--profile`), never the real one, and run one instance at a time: a second game on the machine slows the first and moves the scripted timing.
 
