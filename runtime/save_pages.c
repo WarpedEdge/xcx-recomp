@@ -75,7 +75,11 @@ void save_pages_names_parse(const char *text) {
             if (len && buf[len - 1] == '\r') buf[len - 1] = 0;
             char *tab = strchr(buf, '\t');
             int page = atoi(buf);
-            if (tab && page >= 1 && page <= SAVE_PAGE_COUNT) save_pages_set_name(page - 1, tab + 1);
+            if (!strncmp(buf, "last\t", 5)) {   // the page the screen was last left on
+                if (page = atoi(buf + 5), page >= 1 && page <= SAVE_PAGE_COUNT) save_pages_set(page - 1);
+            } else if (tab && page >= 1 && page <= SAVE_PAGE_COUNT) {
+                save_pages_set_name(page - 1, tab + 1);
+            }
         }
         line = end ? end + 1 : NULL;
     }
@@ -89,6 +93,7 @@ size_t save_pages_names_format(char *out, size_t cap) {
         if (w < 0 || (size_t)w >= cap - o) break;
         o += (size_t)w;
     }
+    if (save_pages_current() && cap - o > 16) o += (size_t)snprintf(out + o, cap - o, "last\t%d\n", save_pages_current() + 1);
     return o;
 }
 
@@ -107,7 +112,7 @@ static void names_load(void) {   // once, when the screen first needs a name
 }
 
 static void names_save(void) {
-    char path[1200], text[SAVE_PAGE_COUNT * (SAVE_PAGE_NAME_MAX * 4 + 8) + 1];
+    char path[1200], text[SAVE_PAGE_COUNT * (SAVE_PAGE_NAME_MAX * 4 + 8) + 32];
     if (!fs_host_profile_file(NAMES_FILE, path, sizeof path)) return;
     size_t n = save_pages_names_format(text, sizeof text);
     if (!plat_file_write_atomic(path, text, n)) rt_log("save pages: cannot write %s", path);
@@ -198,6 +203,7 @@ void rt_save_pages_pad(uint64_t scene, uint32_t pad) {
     if (delta && save_pages_step(delta)) {
         save_pages_reload(scene);
         sound_pending = 1;
+        names_save();   // the page is kept for the next launch
     } else if (pad & PAD_Y && !(pad & (PAD_L | PAD_R))) {
         rename_page();
         rename_cooldown = 30;

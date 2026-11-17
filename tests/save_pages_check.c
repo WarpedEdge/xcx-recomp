@@ -117,6 +117,20 @@ int main(void) {
     save_pages_name(1, nm, sizeof nm);
     CHECK(!strcmp(nm, "Round trip"), "a saved name reads back: '%s'", nm);
 
+    // the page the screen was left on is kept with the names
+    save_pages_set(4);
+    save_pages_names_format(text, sizeof text);
+    save_pages_set(0);
+    save_pages_names_parse(text);
+    CHECK(save_pages_current() == 4, "the last page reads back: %d", save_pages_current());
+    save_pages_set(0);
+    save_pages_names_format(text, sizeof text);
+    CHECK(!strstr(text, "last"), "the first page writes no line");
+    save_pages_set(3);
+    save_pages_names_parse("last\t99\n");
+    CHECK(save_pages_current() == 3, "a last page out of range is ignored");
+    save_pages_set(0);
+
     // centring: a wider name needs fewer blanks before it, and none goes out of range
     char sp1[MAX_SPACES + 1], sp2[MAX_SPACES + 1], sp3[MAX_SPACES + 1];
     name_spacer("Te", sp1, sizeof sp1);

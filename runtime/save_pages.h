@@ -20,6 +20,7 @@ int save_pages_remap_path(const char *rest, char *out, size_t cap);
 // Page names. A page can carry a name the player gave it ("Mods run", a character's name); a page without one is called
 // "Page N". Names are kept in the profile directory (save-pages.txt, one "page<TAB>name" line each; not in the game's
 // journaled save, which only keeps what the game itself writes) and are UTF-8, at most SAVE_PAGE_NAME_MAX characters.
+// The same file keeps a "last<TAB>page" line, the page the screen was left on, which the next launch opens on.
 #define SAVE_PAGE_NAME_MAX 24
 void save_pages_name(int page, char *out, size_t cap);        // the page's name, else "Page N" (0-based page)
 // Sets the page's name from UTF-8 text: control characters and the brackets of text tags are dropped, the ends trimmed,
