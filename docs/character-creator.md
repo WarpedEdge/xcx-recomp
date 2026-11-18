@@ -88,7 +88,7 @@ Checked on Linux, first male preset, scripted input:
 
 - The save mount has four files: `systemdata`, `gamedata`, `avatarmakedata` and `socialdata` (`main+0x340dd0`).
 - The character data of the player is written with named fields, among them `FaceID`, `HairBaseID`, `HairOptionID`, `Color%d`, `TexA_*`, `Voice` and the levels (`main+0x344080`). The hairstyle is its `ResourceID`.
-- `avatarmakedata` is written from the creator's save menu. It was 740 bytes (0x2e4) for the first male preset. Its bytes are masked: the first 0x200 bytes and the last 0xe4 bytes look random, and XOR of the two parts shows a readable record. In it the face id 58 and the hair id 72 sit next to each other as 16-bit values (offset 0x58), followed by the option id (0), as in the `DEF_PcList` columns. Floats of 1.0 and several 0x32 bytes follow. The mask itself is not worked out. A second, shorter record starts near offset 0xa0.
+- `avatarmakedata` is written from the creator's save menu, which offers five avatar slots (the load menu lists five). The file was 740 bytes (0x2e4, which is 5 x 148) after one save. Its bytes are masked: XOR of the byte at `i` with the byte at `i + 0x200` shows a readable record. In it the face id 58 and the hair id sit next to each other as 16-bit values (offset 0x58 of that XOR), followed by the option id (0), as in the `DEF_PcList` columns. The hair id was 72 for the first male preset and 20 after the NPC-only hairstyle was chosen and saved. Floats of 1.0 and several 0x32 bytes follow. The mask itself is not worked out, and neither is which slot a record belongs to.
 - The online avatar record has a field called `Binary` (Seamless note 09). It is very likely this data. Not checked.
 - Not checked: what a build without the hooks does with a `ResourceID` that is not in the face's list when the creator opens. The loop at `0x770e70` searches by `ResourceID`, and what it does with no match was not read. The model itself should load, as NPCs use the same ids.
 
@@ -107,6 +107,22 @@ First tries, one hairstyle each:
 - Other gender: `ResourceID` 232 (row 58) on male face 0. Female preset 15 already wears it.
 - NPC-only: `ResourceID` 20 (row 114). It has no icon, so the first version needs a placeholder icon, and nothing for its name (the grid shows icons only).
 - 354, 356 and 358 have no row to copy, so they need a made-up row. Leave them for last.
+
+## First test
+
+Checked on Linux with scripted input. A test hook (`recomp/avatar_hair.py`, `runtime/avatar_hair.c`, built with `gen.py --avatar-hair-hook`) adds rows from `XCX_HAIR_EXTRA`, a list of `face:row` pairs. It sits on three sites of the 2.0.0 `main`: the entry of the list builder (`0x7799b0`, to note the face), the entry of the `AvtChrID` reader (`0x54674c`, which answers with the face for an extra row) and the instruction after the builder's icon answer (`0x779a4c`, where an icon id of 0 becomes the first hair icon). Every other reader of the table compares against the same face, so one answer covers them. No table is copied.
+
+Run with rows 25, 58 and 114 added to face 0 (the first male preset's face):
+
+- The list grew from 9 to 12 icons: rows 1 to 8, the three extras, then row 134. The face's own rows keep their order. Extras sit by row number, so an extra with a low row number would come before rows of the face that have higher numbers. Appended rows (option 1 above) avoid that.
+- Row 25 (`ResourceID` 132, the first hairstyle of face 3, male): looks natural on face 0.
+- Row 58 (`ResourceID` 232, a female hairstyle with twin tails and a clip): it loads, but bare scalp shows on top of the male head. It does not fit.
+- Row 114 (`ResourceID` 20, an NPC-only hairstyle): loads as short black hair and looks natural. Its icon is the placeholder. The hair did not take the creator's colour in the preview (not examined further).
+- Choosing row 114 moves the check mark to it. After the creator's save menu wrote the avatar data, the file held face 58 and hair 20.
+- The binary without the hooks, with that profile: loading the saved avatar from the creator's save menu showed the short black hair on the model, without an error. What the hair tab's grid shows in that case was not observed.
+- The icons, the live preview and the check mark are the game's own screen. The head fades out and in while a model switches, as it does for the game's own hairstyles.
+
+Not tested: a female face with a male hairstyle, the other presets, colour and option parts on the added hairstyles, loading a game after finishing the creator, the field's avatar editing, and Windows.
 
 ## Testing by script
 
