@@ -49,7 +49,7 @@ The title and the labels are set with the game's own text functions (`rt_call`),
 
 The page name is drawn in `rect_TextTitle03`, a text pane of the screen frame that these screens leave empty. `rect_TextTitle02` holds the blank spaces that centre the name in the box right of the slash. `title_label` and `name_spacer` in `runtime/save_pages.c` set both.
 
-The name does not match the title's font. The pane uses the smaller, grayer sub-title style. [ui-widgets.md](ui-widgets.md) describes the panes and lists everything tried to change the style. The title text itself is unchanged apart from the page label.
+The pane has the layout's smaller sub-title style, so `title_label` gives it the title widget's style selector before it sets the name (`match_title_style`). The name is then drawn in the title's typeface and size. Its colour is still a little dimmer than the title's. [ui-widgets.md](ui-widgets.md) describes the panes, the selector and what was tried for the colour. The title text itself is unchanged apart from the page label.
 
 ## Limits
 

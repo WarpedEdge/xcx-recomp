@@ -262,9 +262,10 @@ static const char SPACER_PANE[] = "rect_TextTitle02", NAME_PANE[] = "rect_TextTi
 
 // Where the name goes, in the layout's own pixels at 1920 wide as measured on screenshots: the second pane starts
 // NAME_BASE after the layout's left edge when the first holds no text, and every blank space in the first moves it by
-// SPACE_WIDTH. BOX_CENTER is the middle of the empty part of the title bar. NAME_UNITS gives a name's width the same
-// way, as an estimate by kind of character (the game's font is proportional; only a few widths were measured: W 25,
-// lower case about 12.5, capitals about 17, digits about 21, space 9.1).
+// SPACE_WIDTH. BOX_CENTER is the middle of the empty part of the title bar. name_width gives a name's width in the same
+// units, as an estimate by kind of character (the font is proportional). The name is drawn in the title's typeface (see
+// match_title_style): the widths are those first measured for the smaller sub-title style times the ratio measured for
+// twenty repeated letters in both styles (m 1.39, W 1.29, A, n, 0 and a space about 1.5).
 enum { NAME_BASE = 355, BOX_CENTER = 1018, MAX_SPACES = 90 };
 static const float SPACE_WIDTH = 9.1f;
 
@@ -277,14 +278,14 @@ static float name_width(const char *s) {
         else if (cp >= 0xc0) cp = (cp & 31), k = 2;
         for (unsigned i = 1; i < k && p[i]; i++) cp = cp << 6 | (p[i] & 63);
         p += k;
-        if (cp == ' ') w += 9.1f;
-        else if (strchr("iljtfr.,;:!|'`", (int)cp) && cp < 128) w += 7.5f;
-        else if (strchr("mwMW@%", (int)cp) && cp < 128) w += 23.0f;
-        else if (cp >= '0' && cp <= '9') w += 21.0f;
-        else if (cp >= 'A' && cp <= 'Z') w += 17.0f;
-        else if (cp >= 'a' && cp <= 'z') w += 12.5f;
-        else if (cp < 0x2e80) w += cp < 128 ? 11.0f : 14.0f;
-        else w += 34.0f;   // full-width characters
+        if (cp == ' ') w += 13.6f;
+        else if (strchr("iljtfr.,;:!|'`", (int)cp) && cp < 128) w += 11.3f;
+        else if (strchr("mwMW@%", (int)cp) && cp < 128) w += 31.0f;
+        else if (cp >= '0' && cp <= '9') w += 31.5f;
+        else if (cp >= 'A' && cp <= 'Z') w += 25.5f;
+        else if (cp >= 'a' && cp <= 'z') w += 18.8f;
+        else if (cp < 0x2e80) w += cp < 128 ? 16.5f : 21.0f;
+        else w += 51.0f;   // full-width characters
     }
     return w;
 }
@@ -323,6 +324,19 @@ void rt_save_pages_text(Cpu *c) {
     title.state = TITLE_HAVE;
 }
 
+// The name pane has the layout's sub-title style: smaller, and a different typeface. The game's text setter reads a
+// style selector from the text pane's widget (a flag at +0x58, a kind at +0x59 and a style id at +0x5a), so the name
+// pane takes the title widget's selector and is then drawn in the title's typeface and size. The colour is not part of
+// the selector: the name stays a little dimmer than the title.
+enum { STYLE_FLAG = 0x58, STYLE_KIND = 0x59, STYLE_ID = 0x5a };
+
+static void match_title_style(uint64_t name_widget) {
+    if (!title.widget || !LD8(title.widget + STYLE_FLAG)) return;
+    ST8(name_widget + STYLE_FLAG, LD8(title.widget + STYLE_FLAG));
+    ST8(name_widget + STYLE_KIND, LD8(title.widget + STYLE_KIND));
+    ST16(name_widget + STYLE_ID, LD16(title.widget + STYLE_ID));
+}
+
 static void title_label(Cpu *c) {
     if (title.state != TITLE_HAVE) return;
     char page[24], name[SAVE_PAGE_NAME_MAX * 4 + 1], label[160];
@@ -338,6 +352,7 @@ static void title_label(Cpu *c) {
         uint64_t pane = rt_call(c, MAIN + F_FIND_CHILD, 2, (uint64_t)(uintptr_t)frame_handle, (uint64_t)(uintptr_t)pane_name);
         uint64_t t = pane ? rt_call(c, MAIN + F_AS_TEXT, 1, pane) : 0;
         if (t) {
+            if (k) match_title_style(t);   // the name pane only; the pane of blanks has no visible text
             rt_call(c, MAIN + F_SET_TEXT, 2, t, (uint64_t)(uintptr_t)text);
             rt_call(c, LD64(LD64(t) + 0x20), 2, t, 1);   // virtual +0x20: show
         }
