@@ -26,11 +26,6 @@ Workers default to one per core, at most as many as fit the memory a new process
 worker that runs out of memory makes the run retry the chunks left with half the workers; out of memory with one
 worker, the run exits with EXIT_MEMORY.
 """
-import mod_menu
-import native_ui
-import argparse
-import json
-import multiprocessing as mp
 import os
 
 # numpy's OpenBLAS commits about 32 MiB of thread buffers per core (up to its 24 threads) as soon as numpy loads. The
@@ -39,6 +34,7 @@ import os
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
 import mod_menu  # noqa: E402
+import native_ui  # noqa: E402
 import argparse  # noqa: E402
 import ctypes  # noqa: E402
 import json  # noqa: E402
