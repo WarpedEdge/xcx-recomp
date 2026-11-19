@@ -166,6 +166,21 @@ Consequences, from the names alone (not yet seen in the game):
 
 Next: find where the game places a hair part on the head, then add a test-only way to change its size and position while the game runs.
 
+## Third test: extras that belong to the right gender
+
+The test hook now takes a face letter in `XCX_HAIR_EXTRA` (`m` for the male faces 0 to 6, `f` for the female faces 7 to 13, `a` for all) and logs the face each list is built for. The list builder runs when the hair tab opens, not when the cursor moves over presets. The presets map to faces in this order (`ITM_AvatarPresetList` row, then `DEF_PcList` face): males 0 and 1 face 0, 2 and 3 face 1, 4 and 5 face 2, 6 and 7 face 3, 8 and 9 face 4, 10 and 11 face 6, 12 and 13 face 5; females 14 and 15 face 7, 16 and 17 face 9, 18 and 19 face 8, 20 and 21 face 10, 22 and 23 face 11, 24 and 25 face 12, 26 and 27 face 13. The grid of presets is 6 wide.
+
+Checked on Linux with scripted input and screenshots (three-quarter view in the hair tab only; the back and side were not looked at):
+
+- Male extras (rows 134 to 136, `fc512001`, `fc522001`, `fc522002`) added to face 0, face 3 and face 6, one face of each head group: all look natural. No bare scalp, normal hairline, the creator's hair colour applies. Face 6 is in group 3, which has no file of its own for these.
+- Female extras (rows 133, 137 to 141) added to face 12 (group 23): long hair, a bob with a clip, bangs, waves. All look natural and take the creator's colour.
+- So within a gender, a hair made for one head group fits another group's head. The earlier failure was my mapping (row 25 is a style face 0 already had as its own file), not a fit problem.
+- Story characters' male hairs (rows 114 to 123) added to face 0: most fit well (short black, long black, blond shaggy, dark swept, blond long), but they keep their own colour and ignore the creator's. Two of the ten showed a bald head and one showed bare scalp at the temples. Which rows these were was not tracked.
+- The creator's list needs no table copy for any of this: the extras use the face's own icons. Only the story characters' hairs have no icon (placeholder needed).
+- The model view can come up with no tabs after the preset is chosen. It happens in the build without the hook too (checked), so it is not caused by it. B opens a yes or no prompt about going back to the preset step, and either answer brings the tabs back.
+
+Not yet tested: the other faces of each group, the back and side views, the female story-character hairs, any hair of the other gender, saving and loading.
+
 ## Testing by script
 
 [ui-testing.md](ui-testing.md) explains the format. What worked on a fresh profile (ticks at 60 Hz, the first frames are slow while caches fill):
