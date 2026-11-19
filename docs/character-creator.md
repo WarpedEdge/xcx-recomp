@@ -124,6 +124,26 @@ Run with rows 25, 58 and 114 added to face 0 (the first male preset's face):
 
 Not tested: a female face with a male hairstyle, the other presets, colour and option parts on the added hairstyles, loading a game after finishing the creator, the field's avatar editing, and Windows.
 
+## Second test: owner recordings
+
+The owner ran the same hook build with extras `0:25,0:58,0:114,7:2,7:33,7:114` on the first male and the first female preset and recorded both.
+
+- Male, 12 icons. The extras sit between the face's own hairs and its last row. Hair of another male face (row 25) is not natural: the hair sits too high and makes the forehead look tall, and from the side the scalp pokes through the hair where it is too small. The female hair (row 58) shows bare scalp. The NPC hair (row 114) was black while the preset's colour was brown, so the creator's hair colour is not applied to it.
+- Female, 13 icons. Extras are sorted by row number among the face's own rows (2, 33, 57 to 64, 114, 138, 140), so icons 1 and 2 are the two male hairs, the preset's own hair (row 58) is icon 4 and the NPC hair is icon 11. The male hairs on the female head show bare scalp and an odd head shape from the side. The NPC hair shows shaved sides and bare scalp on the head too.
+- One garbled green frame at the start of the female recording, gone after about a second. Not seen again.
+- Conclusion: a hairstyle is made for the head of its own face. Moving a hair to another head needs its size and position changed, and one scale may not suit every head.
+
+## Fit research (read from data and code, nothing changed yet)
+
+- `MNU_AvatarCharList` has per-face body numbers: `ScaleMin` and `ScaleMax` (92 to 106 for most male faces, 89 to 106 for female ones) and the six `BustScale` columns (zero for male faces). `HigeType` and `AgeType` tell the facial hair and age type. Nothing in the table says anything about a head or a hair.
+- Every face row uses the same `ActionFile` (`pc/pc900000`) and `MotionFile` (`pc/pc010000`). Strings in the program also name `/chr/pc/pc010000m.chr` and `/chr/pc/pc010000f.chr`.
+- `RSC_PCFcList` (375 rows) lists the face resources (`fc...`) with lens ranges for the eye texture. It has no hair data.
+- The program names the parts of a player model `Pc%02dHead`, `Pc%02dHairBase`, `Pc%02dHairOpt`, `Pc%02dBody`, `Pc%02dRig` and others. One start-up function (`f_70001e4710`, a loop of four) registers these names with bit flags. It was not read further.
+- The program loads `/hkc/pc/pc0101%02d.sar` from two functions (`f_7000328278`, `f_700032b844`), which looks like the hair and cloth physics. The strings `hair1` to `hair24`, `resel_hair`, `sidehair` and `newrim_Hair_ShadowInf` are in the program too. What they name was not checked.
+- No head collider or fit calculation was found in the tables. Not checked: whether the model files carry one.
+
+Next: find where the game places a hair part on the head, then add a test-only way to change its size and position while the game runs.
+
 ## Testing by script
 
 [ui-testing.md](ui-testing.md) explains the format. What worked on a fresh profile (ticks at 60 Hz, the first frames are slow while caches fill):
