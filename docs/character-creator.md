@@ -179,7 +179,47 @@ Checked on Linux with scripted input and screenshots (three-quarter view in the 
 - The creator's list needs no table copy for any of this: the extras use the face's own icons. Only the story characters' hairs have no icon (placeholder needed).
 - The model view can come up with no tabs after the preset is chosen. It happens in the build without the hook too (checked), so it is not caused by it. B opens a yes or no prompt about going back to the preset step, and either answer brings the tabs back.
 
-Not yet tested: the other faces of each group, the back and side views, the female story-character hairs, any hair of the other gender, saving and loading.
+Not yet tested: the other faces of each group, the back and side views, the female story-character hairs, any hair of the other gender, saving and loading (the first three of these are covered by the fourth test).
+
+## Fourth test: every extra, one by one
+
+Each hairstyle was put on one face and the cursor was moved onto it, in the three-quarter view, with a screenshot per hair. The run flow is the one under "Testing by script" below, with the preset grid at its start (female presets are local indexes 0 to 13, six per row, so face 12 is one row down and four to the right). A list of 13 or fewer icons fits in four rows and the cursor wraps around at the edges of the grid.
+
+**Female hair on a male head (face 0), rows 57 to 64, 81, 97, 133, 137 to 141:** the shape of the hair is right, but a bare patch of scalp shows on top of the head in almost every case. The hair is a little too small or too low for the male head. Only the short swept style of row 57 showed no patch. This is the same patch seen in the owner's recordings, so a hair of the other gender does not fit without a change of its size or position, which is not found yet (see the fit research above). Not tried: male hair on a female head (the owner's recording showed bare scalp there too).
+
+**Story characters' male hairs (rows 114 to 123) on face 0:** the model is the story character's own, so it keeps its colour and does not take the creator's colour.
+
+| Row | Look on a creator head |
+| --- | --- |
+| 114 | short black, fits |
+| 115 | long blue, a strip of bare scalp at the top |
+| 116 | long black, fits |
+| 117 | short black, fits |
+| 118 | short grey, fits |
+| 119 | short blond, fits |
+| 120 | head shows bald (a thin black strip at the back only) |
+| 121 | shaggy blond, fits |
+| 122 | head shows bald |
+| 123 | swept blond, fits |
+
+The bald ones are probably hairs made to be worn with the character's own head model, which may carry part of the hair (not checked). Rows 115, 120 and 122 are left out of the built-in list.
+
+**Story characters' female hairs (rows 124 to 132) on face 12:** all nine fit, with no bare scalp: long silver, black bob, blond bob with a hair clip, silver bob, cream bob with a fringe, short red, long black, orange bob with a fringe, and one long pale blue style with small lights (row 132). They keep their own colours.
+
+**Rows 81 and 97 (the style that only groups 21 and 22 list) on face 7 (group 21) and face 12 (group 23):** both fit, black or pink with a fringe and ends that reach the shoulder, no bare scalp.
+
+**Why the other gender's hair sits too low (read from the rig files, one change tried).** A rig file (`_rig.skl`, header `BC` then `SKEL`) holds 153 bones for a head or a hair. The header has three tables: 48-byte local transforms at 0x120 (position, rotation quaternion, scale), parent indices (16-bit, -1 for the root) at 0x2760, and name offsets (16-byte entries) at 0x1dd0. Bone world positions follow by walking the parents. The head joint (`JU_head`) is at the same place in every male head and hair rig, and at another place in every female one:
+
+| | x | y | z |
+| --- | --- | --- | --- |
+| male rig | 0 | 1.608 | -0.034 |
+| female rig | 0 | 1.643 | -0.024 |
+
+So on the male skeleton the head joint is 3.5 cm lower and 1 cm further back, while all head meshes sit at the same height (the boxes read earlier). A hair is skinned relative to the joint, so a female hair on a male head lands 3.5 cm lower than it is made for, which is the bare patch on top. The same offset reversed would explain the male hair on a female head. A fix therefore looks like a shift of the hair by the joint difference (up 3.5 cm and 1 cm forward for female hair on a male head, the reverse for male hair on a female head), with every head of a gender sharing the same offset. Not confirmed in the game: a loose RomFS mod (`runtime/romfs_mods.c`) that changed the joint's local position in a female hair's rig made no difference, even at 25 cm, and the log showed the archive never asked for those rig files by path, so the loose files are not read for hair models. Where the game reads a hair's rig and model is not found yet. The next step is to find that read, or to change the loaded data in memory.
+
+**The built-in list.** `runtime/avatar_hair.c` now has a list used when `XCX_HAIR_EXTRA` is not set, so no setting is needed to get the same hairstyles on every face of a gender. Every male face (0 to 6) is offered rows 134 to 136 and the story characters' rows 114, 116 to 119, 121 and 123; every female face (7 to 13) rows 81, 97, 133, 137 to 141 and 124 to 132. A face that already has a row lists it once. `XCX_HAIR_EXTRA=none` turns the extras off, and any other value replaces the built-in list, as before.
+
+Not done: any hair of the other gender in the list (needs a fit), the three added characters' hairs without a row (354, 356, 358), icons that tell the story characters' hairs apart (they all show the first hair icon, because the table gives them no icon. A solid colour would need the icon sheet's texture changed, which is not looked at: the icon rows are numbered per sex in `MNU_AvrIconHairList`, 59 male and 63 female cells in use), the field's avatar editing, Windows.
 
 ## Testing by script
 
