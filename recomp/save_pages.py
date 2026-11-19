@@ -14,7 +14,8 @@ OPEN_ENTRY = 0x6654a0   # the screen's constructor; X0 is the new screen object
 UPDATE_ENTRY = 0x6660a0   # the screen's update, once per frame; X0 is the screen object
 TEXT_ENTRY = 0x916d44   # the text widget's string setter every label goes through: X0 widget, X1 UTF-8 string
 LABEL_ENTRY = 0x55f548   # sets the text of the child named X1 of the layout handle X0 from a message (the screen frame's title goes through it)
-WORDS = {0x55f548: 0xd10103ff, 0x6661bc: 0x2a140008, PAD_SITE: 0x52820009, ROWS_ENTRY: 0xd10703ff, OPEN_ENTRY: 0xd10243ff, TEXT_ENTRY: 0xd101c3ff,
+REQUEST_ENTRY = 0x928620   # asks for the Save/Load screen: X1 is the mode, 1 for Save and 0 for Load
+WORDS = {REQUEST_ENTRY: 0xd10143ff, 0x55f548: 0xd10103ff, 0x6661bc: 0x2a140008, PAD_SITE: 0x52820009, ROWS_ENTRY: 0xd10703ff, OPEN_ENTRY: 0xd10243ff, TEXT_ENTRY: 0xd101c3ff,
          UPDATE_ENTRY: 0xa9bc7bfd}
 
 
@@ -49,4 +50,6 @@ def entry(mod, address):
         return 'rt_save_pages_text(c);'
     if offset == LABEL_ENTRY:
         return 'rt_save_pages_label_entry(c);'
+    if offset == REQUEST_ENTRY:
+        return 'rt_save_pages_request((uint32_t)c->x[1]);'
     return ''

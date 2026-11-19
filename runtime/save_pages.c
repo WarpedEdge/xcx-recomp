@@ -307,6 +307,12 @@ void rt_save_pages_label_entry(Cpu *c) {
     last_label.idx = h ? LD32(h + 8) : 0;
 }
 
+static int load_screen;   // the screen asked for last is the Load screen
+
+void rt_save_pages_request(uint32_t mode) {
+    load_screen = !(mode & 1);
+}
+
 void rt_save_pages_open(void) {
     names_load();
     title.state = TITLE_ARMED;
@@ -327,8 +333,14 @@ void rt_save_pages_text(Cpu *c) {
 // The name pane has the layout's sub-title style: smaller, and a different typeface. The game's text setter reads a
 // style selector from the text pane's widget (a flag at +0x58, a kind at +0x59 and a style id at +0x5a), so the name
 // pane takes the title widget's selector and is then drawn in the title's typeface and size. The colour is not part of
-// the selector: the name stays a little dimmer than the title.
+// the selector: it is set by NAME_COLOUR.
 enum { STYLE_FLAG = 0x58, STYLE_KIND = 0x59, STYLE_ID = 0x5a };
+
+// The colour is set by a tag in the text: the game's colour tag takes the name of an entry of its colour table (black,
+// white, red, green, blue, yellow, gray, lightblue, orange, lightblue2 and lightblue3). The title's pale blue-grey is
+// nearest to lightblue3, within about 8 of 255 per channel on screen; the name's default is the same hue, a quarter
+// dimmer. A name typed by a player has [ and ] removed, so it cannot carry a tag of its own.
+static const char NAME_COLOUR[] = "[ST:col p1=lightblue3]";
 
 static void match_title_style(uint64_t name_widget) {
     if (!title.widget || !LD8(title.widget + STYLE_FLAG)) return;
@@ -342,7 +354,9 @@ static void title_label(Cpu *c) {
     char page[24], name[SAVE_PAGE_NAME_MAX * 4 + 1], label[160];
     save_pages_label(page, sizeof page);
     save_pages_name(save_pages_current(), name, sizeof name);
-    snprintf(label, sizeof label, "%s   [ST:icon p1=l] %s [ST:icon p1=r]", title.text, page);
+    // The Load screen's title is the game's "Load Game", longer than the Save screen's "Save", so it shows "Load". Like
+    // "Page", that word is English in every language.
+    snprintf(label, sizeof label, "%s   [ST:icon p1=l] %s [ST:icon p1=r]", load_screen ? "Load" : title.text, page);
     title.busy = 1;
     rt_call(c, MAIN + F_SET_TEXT, 2, title.widget, (uint64_t)(uintptr_t)label);
     for (int k = 0; k < 2 && frame_handle[0]; k++) {
@@ -352,7 +366,12 @@ static void title_label(Cpu *c) {
         uint64_t pane = rt_call(c, MAIN + F_FIND_CHILD, 2, (uint64_t)(uintptr_t)frame_handle, (uint64_t)(uintptr_t)pane_name);
         uint64_t t = pane ? rt_call(c, MAIN + F_AS_TEXT, 1, pane) : 0;
         if (t) {
-            if (k) match_title_style(t);   // the name pane only; the pane of blanks has no visible text
+            char coloured[sizeof name + sizeof NAME_COLOUR];
+            if (k) {   // the name pane only; the pane of blanks has no visible text
+                match_title_style(t);
+                snprintf(coloured, sizeof coloured, "%s%s", NAME_COLOUR, text);
+                text = coloured;
+            }
             rt_call(c, MAIN + F_SET_TEXT, 2, t, (uint64_t)(uintptr_t)text);
             rt_call(c, LD64(LD64(t) + 0x20), 2, t, 1);   // virtual +0x20: show
         }

@@ -60,7 +60,13 @@ A text pane's widget holds a style selector that the text setter (`main+0x91720c
 
 The widths of the larger text were measured with 20 repeated letters in both styles (3440x1440 window): m 548 and 762 px, W 594 and 766, A 419 and 631, n 393 and 590, 0 437 and 657, ten n separated by spaces 293 and 441.
 
-Colour is not in the selector. These did not change it: the text object's words at `+0x3e8` and `+0x3ec` (equal on both panes), the float at `+0x3fc` (0.97 on the title, 0.83 on the name), the widget's `+0xd8` and the second style pair at `+0x118`. The layout has a per-pane value that `main+0x55fc9c` scales (read and written through `main+0xa1cb2c` and `main+0xa1ca38`); it is the likely home of the tint, but a call made with a pane handle found by name crashed or found no pane, so it was not reached.
+### Colour in text
+
+The colour comes from a tag in the text, not from the selector. `[ST:col p1=<name>]` becomes `[System:Color p1=<name>]` before drawing, and the game looks `<name>` up in a table of colour names. The parameter name does not matter. A number does not work, which is why the values 0 to 9 tried before changed nothing. The table, read from the game's memory, has black, white, red, green, blue, yellow, gray, lightblue, orange, lightblue2 and lightblue3. A colour replaces the pane's own tint: white gives a plain grey, not the title's blue-grey.
+
+Measured on screen with the title at RGB (181, 209, 214) and the name pane's default at about three quarters of that: lightblue3 gave (171, 194, 217), the nearest. `runtime/save_pages.c` puts `[ST:col p1=lightblue3]` in front of the name. A name typed by a player has `[` and `]` removed, so it cannot carry a tag.
+
+These were also tried for the colour and changed nothing: the text object's words at `+0x3e8` and `+0x3ec` (equal on both panes), the float at `+0x3fc`, the widget's `+0xd8` and the second style pair at `+0x118`, and each of the floats from `+0x1c0` to `+0x264` that differ between the two text objects. The layout function that scales a pane's value (`main+0x55fd30`) refuses text panes.
 
 ## Playing a menu sound
 
@@ -92,9 +98,9 @@ All of this was tried on the Save and Load title, to make the page name look lik
 
 - **Writing into the title widget's fields.** The fields near `+0x38` are part of a pointer, and the write crashed the game. The size-like values at `+0xf8`, `+0x1b8` and `+0x278` are measured text widths. No field is a settable pane width.
 - **Resizing the title pane.** The widget behind `rect_TextTitle` is an animation and state wrapper (first words of its table at `main+0x1c8e4b8`). A move or resize needs the layout's own calls.
-- **Colour tags.** `[ST:col ...]` with the parameter names `p1`, `ColorID`, `id` and `name` and values 0 to 9 changed nothing. The tags were accepted and the text kept.
+- **Colour tags with numbers.** `[ST:col ...]` with the parameter names `p1`, `ColorID`, `id` and `name` and values 0 to 9 changed nothing, because the value has to be a colour name. See "Colour in text".
 - **The scale function.** `main+0x917448(widget, s0, s1)` with the vector registers set to 1.0 and 1.35 changed nothing.
 - **Putting the name in the title's own text.** The title's text object (`[widget+0x38]`) has an overflow mode at `+0x3f0`, set with `main+0xa1d204(widget+0x38, mode)`. The game uses mode 3, which shrinks the whole text to the pane's width. Mode 2 also shrinks it. Modes 0, 4 and 5 clip the text at the pane's right edge. Mode 1 draws it small and high. The text object's width field at `+0x3da` reads 172, the pane's width. Writing 900 to it, before or after setting the text, changed nothing, because the clip comes from the layout done when the text is set.
 - **Copying style fields of the text object.** Copying the colour-like floats, the effect values, the style ids and the glyph block from the title's text object to the name pane's changed nothing on screen. Copying the structural fields (`+0xd4`, `+0xf0`, `+0x1e4`) crashed the game. The style selector is on the pane's widget, not on its text object: see "Changing a text pane's typeface and size".
-- **A font name.** No font family name, Futura or any other, could be read from the game's data. Only `MNU_Font*`, `MNU_ResFontStyle` and `MNU_FONTICON` strings turned up. The title and the name pane both use the game's menu font. They differ in size, weight and colour, which the layout sets per pane; the style selector sets typeface and size, the colour is still open.
+- **A font name.** No font family name, Futura or any other, could be read from the game's data. Only `MNU_Font*`, `MNU_ResFontStyle` and `MNU_FONTICON` strings turned up. The title and the name pane both use the game's menu font. They differ in size, weight and colour, which the layout sets per pane; the style selector sets typeface and size, and a colour tag sets the colour.
 - **Mouse clicks on the title.** The cursor is captured and hidden on this screen, and the left click is already Y by default. Y covers the click.

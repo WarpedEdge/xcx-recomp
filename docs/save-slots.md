@@ -41,6 +41,7 @@ The generator emits the hooks for the 2.0.0 `main` only. It checks the build ID,
 | `0x6660a0` (entry) | `rt_save_pages_update` | Plays the page change sound the frame after the pad hook asked for it. |
 | `0x6654a0` (entry) | `rt_save_pages_open` | A screen was built. Looks for its title next. |
 | `0x916d44` (entry) | `rt_save_pages_text` | Takes the title widget and the empty-row text when the game sets them. |
+| `0x928620` (entry) | `rt_save_pages_request` | Remembers whether the screen asked for is Save (mode 1) or Load (mode 0). The Load screen's title then reads "Load", as the Save screen's reads "Save". |
 | `0x55f548` (entry) | `rt_save_pages_label_entry` | Keeps the frame layout's handle from the label setter the title goes through. |
 
 The title and the labels are set with the game's own text functions (`rt_call`), so they use the game's font. They are English in every language. The sound is the one the game's L/R tab screens play. [ui-widgets.md](ui-widgets.md) lists the functions involved.
@@ -49,7 +50,7 @@ The title and the labels are set with the game's own text functions (`rt_call`),
 
 The page name is drawn in `rect_TextTitle03`, a text pane of the screen frame that these screens leave empty. `rect_TextTitle02` holds the blank spaces that centre the name in the box right of the slash. `title_label` and `name_spacer` in `runtime/save_pages.c` set both.
 
-The pane has the layout's smaller sub-title style, so `title_label` gives it the title widget's style selector before it sets the name (`match_title_style`). The name is then drawn in the title's typeface and size. Its colour is still a little dimmer than the title's. [ui-widgets.md](ui-widgets.md) describes the panes, the selector and what was tried for the colour. The title text itself is unchanged apart from the page label.
+The pane has the layout's smaller sub-title style, so `title_label` gives it the title widget's style selector before it sets the name (`match_title_style`). The name is then drawn in the title's typeface and size. Its colour is set with a colour tag, lightblue3, the nearest of the game's colours to the title's. [ui-widgets.md](ui-widgets.md) describes the panes, the selector and the colour tag. The title text itself is unchanged apart from the page label.
 
 ## Limits
 

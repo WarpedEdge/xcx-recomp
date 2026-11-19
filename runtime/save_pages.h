@@ -54,6 +54,7 @@ void rt_save_pages_rows(struct Cpu *c);
 // every language.
 void rt_save_pages_open(void);
 void rt_save_pages_text(struct Cpu *c);
+void rt_save_pages_request(uint32_t mode);   // main+0x928620: the screen is asked for, mode 1 is Save and 0 is Load
 void rt_save_pages_label_entry(struct Cpu *c);   // main+0x55f548: remembers which layout handle and child name it was given
 
 // Called at the start of the screen's update, once per frame (c->x[0] is the screen object): plays the page change
