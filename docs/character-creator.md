@@ -142,6 +142,28 @@ The owner ran the same hook build with extras `0:25,0:58,0:114,7:2,7:33,7:114` o
 - The program loads `/hkc/pc/pc0101%02d.sar` from two functions (`f_7000328278`, `f_700032b844`), which looks like the hair and cloth physics. The strings `hair1` to `hair24`, `resel_hair`, `sidehair` and `newrim_Hair_ShadowInf` are in the program too. What they name was not checked.
 - No head collider or fit calculation was found in the tables. Not checked: whether the model files carry one.
 
+### Model files: faces and hairs are the same kind of resource
+
+A face id and a hair id are both rows of `RSC_PCFcList` (375 rows, row id = the id, base 1). Its `Resource` column is the model name, and the files are `/chr/fc/<name>.wimdo`, `.wismt` and `<name>_rig.skl` in the archive (paths are found by hashing, see [game-data-tables.md](game-data-tables.md); all 306 `fc` models were listed this way).
+
+A name is `fc` plus six digits: `[sex][group][kind][style][0][variant]`.
+
+- sex: 1 male, 2 female (3, 4 other characters, 5 and 6 are extra male and female hairs, 18 and 28 are the story characters' heads and hairs).
+- group: the head family. Male faces: face 0 is group 1, faces 1 to 3 group 2, faces 4 to 6 group 3. Female: faces 7, 8, 9 group 21, faces 10 and 11 group 22, faces 12 and 13 group 23.
+- kind: 1 head, 2 hair, 3 the hair's option part (`AppResourceID`).
+- style: 0 to 7 are the eight standard hairstyles, plus 8 on two female faces.
+- variant: 1 to 3, the face within its group. The head of face 0 (`fc111002`) is variant 2, and so on.
+
+Consequences, from the names alone (not yet seen in the game):
+
+- Every male face already offers the same eight styles, each as its own file made for that head group. Every female face does too. Face 0, for example, has `fc112002` as its first style and face 3 has `fc122003`. So the lists differ only by the extra rows 133 to 141, not by the standard styles.
+- My first test put row 25 (face 3's first style, group 2) onto face 0 (group 1), which already has the same style as `fc112002`. That mismatch is expected, and nothing needs adding there.
+- Group 1 has one variant per style, groups 2 and 3 have three. A style a face lacks can use another variant of its group.
+- Extras that exist: male `fc512001`, `fc522001`, `fc522002` (faces 0 to 2 only, no file for group 3). Female `fc612001` to `fc612003` and `fc612102` (group 21), `fc622002` (face 10), `fc222801` and `fc222802` (style 8, faces 10 and 11). Faces without an extra have no file made for their head.
+- The story characters' hairs (rows 114 to 132, for example `fc182010`) exist only for their own heads (groups 18 and 28).
+- All 41 head models have almost the same box size, about 0.38 x 0.46 x 0.40 around a centre height of 1.65, male, female and story characters alike (read from the first floats after the models offset in the `.wimdo`). So a hair does not need a different overall size for another head. The mismatch is in the shape of the scalp and the position of the hair bones, which the box does not show.
+- Both the head and the hair model have their own rig file (`_rig.skl`) with hair physics joints (`DJ_hair...`). A hair is skinned to its own rig, so where a hair sits on another head depends on how the two rigs' bones line up. Not read yet.
+
 Next: find where the game places a hair part on the head, then add a test-only way to change its size and position while the game runs.
 
 ## Testing by script
