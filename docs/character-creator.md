@@ -235,6 +235,16 @@ Checked on Linux with scripted input and by the owner in the game.
 
 Not done: cursor start when the current hair is a story or bonus row, female presets' lists (only checked through the tables), saving and loading with the new lists, the field's avatar editing, Windows, any fit of other-gender hair.
 
+## Fit of other-gender hair: bind data (loose-file test)
+
+**What decides where a hair sits.** A hair model (`.wimdo`) keeps one 4x4 inverse-bind matrix per skin bone (columns in memory, translation in the last column, 0xb8 bytes per bone element, the matrix 0x38 bytes into the element; for the 39-bone female hair `fc212002` the first one is at +0x2d0). Each equals the inverse of the bone's bind-pose world matrix in the hair's own `_rig.skl`. The game skins the hair as pose(wearer's bone) times that inverse bind. The rig files are whole skeletons (about 150 bones) and differ by gender: the hair bones `DJ_hair*` sit about 5 cm higher in the male rig than in the female one, `JU_head` 3.5 cm lower. A hair of the other gender is therefore offset by the difference of the two bind poses, which is the bare patch of scalp. Same-gender hairs on another head differ by about 1 cm.
+
+**Rig file header.** The bone count is at +0x58, the parent table offset (16-bit indices) at +0x50, the name table (16-byte entries, the first word a file offset) at +0x60 and the local transforms (48 bytes: position, quaternion, scale) at +0x70. That last offset is 0x120 in the hair rigs and 0x130 in the head rigs, so it must be read from the header.
+
+**Test with loose files** (`runtime/romfs_mods.c`, a mod that replaces `chr/fc/<name>.wimdo`): every inverse bind of the female hair `fc212002` replaced by the inverse of the bind world of the male skeleton's bone of the same name. On the first male preset the bare patch is gone and the hair fits (the same screen without the mod shows it). The same change for a male hair on a female preset fits too. A loose file changes the hair for everybody who wears it, so a real fix has to act per wearer.
+
+**What was tried at run time.** The per-frame pose feed (`main+0x3177a0`) hands each skin bone's pose matrix to the part (a 64-byte matrix on the stack at sp+0x80, then the setter at `main+0x9bc8b4`, which copies it). A hook after its last store (`main+0x317a60`) sees the part, the wearer's skeleton (`[chr+0x28]+8` is the skeleton file in memory, the head's rig) and the bone mapping by name. For every part the log shows the part's bind and the wearer's bind agree (differences under 0.001) for parts that belong to their wearer. Two things did not work: the other-gender hair never showed up in that hook, and changing the pose matrix there (lifting every bone of the male skeleton by 30 cm) did not move the character in the creator at all. So the character shown in the creator is not fed through this function, or its pose is written elsewhere afterwards. The palette builder (`main+0x9bc940`) reads the inverse binds straight from the model file in memory (`this+0x130`), and is the other place to change them.
+
 ## Testing by script
 
 [ui-testing.md](ui-testing.md) explains the format. What worked on a fresh profile (ticks at 60 Hz, the first frames are slow while caches fill):
