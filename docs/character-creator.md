@@ -2,7 +2,7 @@
 
 How the game's character creator builds its hairstyle list, what stores the choice, and what that means for offering more hairstyles. It is the base for making every hairstyle in the game choosable ([game-data-tables.md](game-data-tables.md) explains how the tables were read).
 
-Status: the tables and the code were read for the 2.0.0 `main`. The first male preset's hair tab was checked in the game on Linux with scripted input. No hook exists yet. Nothing was run on Windows. Items marked "not checked" were not tested.
+Status: the tables and the code were read for the 2.0.0 `main`. A test hook exists (uncommitted, for the 2.0.0 `main` only) and was checked in the game on Linux with scripted input and by the owner; see the tests below. Nothing was run on Windows. Items marked "not checked" were not tested.
 
 ## Overview
 
@@ -154,10 +154,10 @@ A name is `fc` plus six digits: `[sex][group][kind][style][0][variant]`.
 - style: 0 to 7 are the eight standard hairstyles, plus 8 on two female faces.
 - variant: 1 to 3, the face within its group. The head of face 0 (`fc111002`) is variant 2, and so on.
 
-Consequences, from the names alone (not yet seen in the game):
+Consequences from the names (the first reading, corrected later):
 
-- Every male face already offers the same eight styles, each as its own file made for that head group. Every female face does too. Face 0, for example, has `fc112002` as its first style and face 3 has `fc122003`. So the lists differ only by the extra rows 133 to 141, not by the standard styles.
-- My first test put row 25 (face 3's first style, group 2) onto face 0 (group 1), which already has the same style as `fc112002`. That mismatch is expected, and nothing needs adding there.
+- Every face has file names for styles 0 to 7, but the designs are not the same on every face of a gender. The icon of a style number differs between faces (face 6's first style is a mohawk that faces 4 and 5 do not have). So every face's list is its own set of hairs, and no two faces in a gender offer the same eight.
+- My first test put row 25 (face 3's first style, group 2) onto face 0 (group 1). That mismatch was a bad choice of row, not a fit problem.
 - Group 1 has one variant per style, groups 2 and 3 have three. A style a face lacks can use another variant of its group.
 - Extras that exist: male `fc512001`, `fc522001`, `fc522002` (faces 0 to 2 only, no file for group 3). Female `fc612001` to `fc612003` and `fc612102` (group 21), `fc622002` (face 10), `fc222801` and `fc222802` (style 8, faces 10 and 11). Faces without an extra have no file made for their head.
 - The story characters' hairs (rows 114 to 132, for example `fc182010`) exist only for their own heads (groups 18 and 28).
@@ -217,9 +217,23 @@ The bald ones are probably hairs made to be worn with the character's own head m
 
 So on the male skeleton the head joint is 3.5 cm lower and 1 cm further back, while all head meshes sit at the same height (the boxes read earlier). A hair is skinned relative to the joint, so a female hair on a male head lands 3.5 cm lower than it is made for, which is the bare patch on top. The same offset reversed would explain the male hair on a female head. A fix therefore looks like a shift of the hair by the joint difference (up 3.5 cm and 1 cm forward for female hair on a male head, the reverse for male hair on a female head), with every head of a gender sharing the same offset. Not confirmed in the game: a loose RomFS mod (`runtime/romfs_mods.c`) that changed the joint's local position in a female hair's rig made no difference, even at 25 cm, and the log showed the archive never asked for those rig files by path, so the loose files are not read for hair models. Where the game reads a hair's rig and model is not found yet. The next step is to find that read, or to change the loaded data in memory.
 
-**The built-in list.** `runtime/avatar_hair.c` now has a list used when `XCX_HAIR_EXTRA` is not set, so no setting is needed to get the same hairstyles on every face of a gender. Every male face (0 to 6) is offered rows 134 to 136 and the story characters' rows 114, 116 to 119, 121 and 123; every female face (7 to 13) rows 81, 97, 133, 137 to 141 and 124 to 132. A face that already has a row lists it once. `XCX_HAIR_EXTRA=none` turns the extras off, and any other value replaces the built-in list, as before.
+**The built-in list (first version).** A list used when `XCX_HAIR_EXTRA` is not set, giving every face the extras of its gender and the story characters' hairs. Replaced by the full lists of the fifth section.
 
-Not done: any hair of the other gender in the list (needs a fit), the three added characters' hairs without a row (354, 356, 358), icons that tell the story characters' hairs apart (they all show the first hair icon, because the table gives them no icon. A solid colour would need the icon sheet's texture changed, which is not looked at: the icon rows are numbered per sex in `MNU_AvrIconHairList`, 59 male and 63 female cells in use), the field's avatar editing, Windows.
+## Fifth test: full lists, order, scrolling, beards
+
+Checked on Linux with scripted input and by the owner in the game.
+
+**Every preset offers every hair of its gender.** Because the designs differ per face (see the correction above), the default list is now every male row (1 to 56) on every male face and every female row (57 to 113) on every female face, plus the bonus rows (male 134 to 136, female 133 and 137 to 141). A face's own rows come first in their natural order, then the other faces' rows, then the bonus rows. This is built in `build_default` in `runtime/avatar_hair.c`; rows are listed through the same getters as before, so the icons are the game's own. The owner confirmed the order and that the mohawk now shows on the younger presets.
+
+**The grid's order.** The grid does not use the list of row ids at `+0xbe8` for its order. It has its own item array (12-byte entries: kind, row, flags) on the grid object at `UI+0x3f38`, built in row order, and it starts the cursor at the current hairstyle's natural position. A hook after `main+0x76de70` (`avatar_hair_items`) reorders the array (story rows go last) and returns the remapped cursor position.
+
+**Scrolling.** After a hair below the first page was chosen, leaving the tab and coming back put the scroll bar at the top while the selection stayed. The widget call after `0x76de70` is `f_70005ac570(grid, index, flag)` and the game passes flag 0 from several places; flag 1 scrolls the index into view. An entry hook on `main+0x5ac570` (`avatar_hair_setcursor`) turns a flag of 0 into 1 for the creator's own grid. The owner confirmed it keeps its place.
+
+**Story characters' solid-colour icons are gone.** They were drawn by painting free cells of the icon sheets (`avatar_icon_patch` in `runtime/vk_texture.c`). With every hair listed, no free cell is left (59 male and 63 female cells are used), so the default list has no story rows. `XCX_HAIR_EXTRA` can still add them with the shared placeholder icon. The gap `IconID`s (male 36, 45, 54, 63, which use `IconNo` 0) and the sheets' unused cells 59 to 63 are free, but reaching them needs a hook on the `IconNo` lookup that was not found.
+
+**Beards and mustaches.** `MNU_AvatarCharList` has `HigeType` per face: male face 0 is 0, faces 1 and 2 are 1, faces 3 to 6 are 2, female faces 0. The category list builder (`0x76d7b0`) reads it through the getter at `0x5461e8`: category 8 (Mustache) needs 2 or more and category 9 (Beard) needs more than 0. An entry hook on that getter (`avatar_hair_hige`, only for the caller at `0x76d814`) can answer 2 for male faces. It is off by default (`XCX_HAIR_BEARDS=1` turns it on) because it does not help: the tabs then show on face 0, but the mustache chosen does not appear (also not when the model-side reader at `0x5aa43c` answers 2). On face 4 it renders. The lists have two entries each (none and one mustache or beard), `MNU_AvrIconBeardList` has two rows (the tab icons), and no resource names exist for beards (the face resource names only have head, hair and option kinds). So beards are part of each head's own assets and the younger heads may not have them, or they use a different draw. The owner notes that the single icon looks the same on every preset while the model's beard differs. Left until the fit of hair is understood.
+
+Not done: cursor start when the current hair is a story or bonus row, female presets' lists (only checked through the tables), saving and loading with the new lists, the field's avatar editing, Windows, any fit of other-gender hair.
 
 ## Testing by script
 
