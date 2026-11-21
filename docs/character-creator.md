@@ -245,6 +245,43 @@ Not done: cursor start when the current hair is a story or bonus row, female pre
 
 **What was tried at run time.** The per-frame pose feed (`main+0x3177a0`) hands each skin bone's pose matrix to the part (a 64-byte matrix on the stack at sp+0x80, then the setter at `main+0x9bc8b4`, which copies it). A hook after its last store (`main+0x317a60`) sees the part, the wearer's skeleton (`[chr+0x28]+8` is the skeleton file in memory, the head's rig) and the bone mapping by name. For every part the log shows the part's bind and the wearer's bind agree (differences under 0.001) for parts that belong to their wearer. Two things did not work: the other-gender hair never showed up in that hook, and changing the pose matrix there (lifting every bone of the male skeleton by 30 cm) did not move the character in the creator at all. So the character shown in the creator is not fed through this function, or its pose is written elsewhere afterwards. The palette builder (`main+0x9bc940`) reads the inverse binds straight from the model file in memory (`this+0x130`), and is the other place to change them.
 
+## Pages: own gender, other gender, story characters
+
+The hair grid shows 56 to 70 icons at once, which is too many to scroll through when it holds both genders and the story characters. The grid is therefore split into three pages, and the right stick (or the arrow keys, which act as the right stick) flips between them while the hair tab is open (`driver_fn` in `runtime/avatar_hair.c`; `XCX_HAIR_PAGING=0` turns it off, `XCX_HAIR_PAGE=0|1|2` sets the page the creator opens on).
+
+| Page | Rows | Icons |
+|---|---|---|
+| 0 | the face's own gender (rows 1 to 56 male, 57 to 113 female, plus the bonus rows) | the game's own |
+| 1 | the other gender's rows | the other gender's icon sheet, swapped in when the sheet is uploaded (`avatar_icon_patch` in `runtime/vk_texture.c`) |
+| 2 | the story characters' rows (114 to 132) | solid colours on cells the page does not use (the rows have no icon) |
+
+Rows 115, 120 and 122 render bald or as a bare patch of scalp on every head and are left out. The face's own eight rows are hidden on pages 1 and 2 (`avatar_hair_avt`), because the game builds the list from the face's rows first.
+
+A page change rebuilds the list (`page_apply`) and then leaves the tab and comes back (`page_bounce`: R then L, injected through `input_inject` in `runtime/input.c`), so the game rebuilds the grid, its icons and the cursor from the new list. The flicker of that bounce is visible.
+
+**The hint.** A small panel at the bottom of the screen shows the pages and the control that flips them, drawn by the host overlay (`hint_draw` in `runtime/ui/menu.cpp`, text and arrows drawn by code, no game assets). The controls follow the glyph system (`input_glyph_snapshot` in `runtime/input_glyphs.h`): two arrow keycaps while the keyboard was used last, a stick circle with "R" or "RS" while a pad is. The glyph art pack has no right-stick tile, so the stick is drawn. It is not an inline glyph of the game's own text, because the creator's help line is built by the game and has no room for an extra entry that the hook could fill; moving it into that line is left open.
+
+## Fit of other-gender hair: what the review shows
+
+**The fix in use.** `avatar_hair_ibind` (after-hook at `main+0x9bca1c`, the palette builder's read of an inverse bind) replaces each hair bone's inverse bind by the inverse of the wearer's rig bind of the bone of the same name, and by the head joint's offset for a bone the wearer's rig lacks. Same-gender hairs change by about 1 cm and fit as before. A hair of the other gender then sits where it was cut. On top of that, a hair cut for the other gender (`other_gender_hair`: a `DJ_hair*` bone or `JU_head` of the part sits 2.5 to 20 cm higher or lower than in the wearer's rig) is scaled and lifted about the wearer's head joint: female hair on a male head by a factor of 1.1 and 1 cm up (`tune_m` in `runtime/avatar_hair.c`), male hair on a female head not at all (`tune_f`, 1.0). `XCX_HAIR_SCALE`, `XCX_HAIR_LIFT` and `XCX_HAIR_FORWARD` override both.
+
+**Two mistakes that hid the fit** (both fixed). The wearer's skeleton is taken from the pose feed, and the slot for the female skeleton was filled by any skeleton of more than 100 bones whose head joint is above 1.625 m. Another skeleton, whose head joint is at 6.5 m, took the slot, so no male hair was fitted on a female head at all and it sat about 4 cm too high with bare temples. Now only a head joint at 1.595 to 1.62 m (male, 1.608 m) or 1.635 to 1.655 m (female, 1.643 m) counts. Second, the decision to scale a hair used the hair's own `JU_head` bone, which several hairs lack, so those (102, 105, 111 among them) were never scaled.
+
+**What is left** (reviewed with `XCX_HAIR_PAGE=1`, which numbers the rows correctly; see the note on labels below):
+
+- Female hair on a male head: 58 (the twin curls, a ring of bare scalp), 68, 69, 83, 98, 101, 102, 105, 107, 110, 111 (a bare patch on the crown of different size; 111 and 58 the worst), and slightly 91 and 113. Row 65 was not photographed (the review's cursor skipped it). The jagged edge of the bangs in those pictures is the hair's scalp cap cutting through the skull, so the cap sits inside the male skull. Scaling and lifting only moves it a little: at a scale of 1.2 with a lift of 5 cm the hair lifts off the forehead (103, 104) and the patch stays.
+- Male hair on a female head: 7 (bare sides), 25 (a large bare dome), 43, 49, 52, 53 and 55 (short crops whose top shows bare skin). Rows 33, 46 and 54 are buzz cuts that show bare scalp with the game's own sparkle glitch on every head. The rest fit.
+- Story characters (page 2): all fit on both heads, 119 and 114 show a little bare scalp on the female head.
+- Own-gender hairs (page 0) fit on every preset.
+
+**Labels of a paged review.** A review that starts on page 0 and flips to page 1 names the items of page 1 one row too high (the row the review reads from its own order is not the row the game shows; icon and preview agree with each other in the game). Use `XCX_HAIR_PAGE=1` (or 2) with `XCX_HAIR_REVIEW_PAGES=1` for a list of row numbers. `XCX_HAIR_REVIEW_WIDE=1` saves the whole frame instead of the head and `XCX_HAIR_REVIEW_MAX=n` stops after n items of a page.
+
+Not solved: the check mark of the grid stays on the position of the current hairstyle even when that hairstyle is not on the page that is shown.
+
+## The review run
+
+Instead of looking at every hairstyle by hand, the game can visit them itself (`XCX_HAIR_REVIEW=<name>`, `review_run` in `runtime/avatar_hair.c`). The creator is reached by an input script (`tools` in the local harness, see below), then for each hairstyle of each page the game waits for the model to settle, saves a crop of the head (`boot_shot_request`, `runtime/boot.c`), moves the cursor right by an injected press and goes on, then ends the process. `XCX_HAIR_REVIEW_PAGES=3` visits all three pages, `XCX_HAIR_TUNE="scale,lift,forward;..."` photographs each hairstyle once per tuning set. The pictures are named `<run>_p<page>_i<item>_r<row>.png` (with `_t<set>` for tuning runs), so a failing picture tells row and item at once.
+
 ## Testing by script
 
 [ui-testing.md](ui-testing.md) explains the format. What worked on a fresh profile (ticks at 60 Hz, the first frames are slow while caches fill):
@@ -262,3 +299,5 @@ Not done: cursor start when the current hair is a story or bonus row, female pre
 ```
 
 A is also the way to open a list. The preset grid appears around frame 3300 at a limit of 120 fps. Picture size is 480x270 unless `XCX_SHOTS_FULL=1` is set, and full size is needed to read the hair tab.
+
+Facial-hair implementation research: [character-creator-beards.md](character-creator-beards.md).
