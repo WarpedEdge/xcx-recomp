@@ -6,6 +6,9 @@
 //   XCX_COOP_POSE_PEER=<ipv4>:<port>   where to send this game's pose
 //   XCX_COOP_POSE_PORT=<port>          the local UDP port to listen on
 // Either one turns the pose link on. Without both of them nothing is sent or shown.
+//   XCX_COOP_FOLLOW=1                  off by default. When the other player has been in another area for 3 s, this game
+//                                      jumps to that area, then to the other player's position (for tests; a joining action
+//                                      the player chooses comes later)
 #include "online_coop_adapter.h"
 #include "cfg.h"
 #include "host.h"
@@ -30,6 +33,16 @@ extern const char rt_game_name[];
 #define SRC_POS 0x30
 #define SEND_INTERVAL_NS 50000000ull   // 20 poses a second
 #define STALE_NS 1000000000ull         // a pose older than this is no longer shown
+// The jump (research notes 15 and 17 of the co-op project). The executor f_70002e269c(manager, 0, 0, row, 1) enters an area by a row of the
+// game's jump table; the same request object the game's own scripts fill can then move the player to a position.
+#define JUMP_EXECUTOR (MAIN + 0x2e269c)
+#define JUMP_RUNNER (MAIN + 0x2f7d20)
+#define JUMP_MANAGER_PTR 0x7001d58318ull   // points at a pointer to the manager
+#define JUMP_REQUEST_PTR 0x7001d587d0ull   // points at a pointer to the request object
+#define MISMATCH_NS 3000000000ull          // how long the other player is in another area before this game follows
+#define JUMP_GAP_NS 15000000000ull         // the shortest time between two jumps to another area
+#define POS_JUMP_GAP_NS 4000000000ull      // after the area jump, the time to let the area load before the position jump
+#define JUMP_TRIES 3                       // area jumps per area the other player is in
 
 enum { HOOK_COOP_TICK = 11, HOOK_COOP_NODE_COPY = 12 };
 
@@ -40,6 +53,9 @@ static struct {
     CoopPose remote;
     int have_remote, holding;
     uint64_t hold_node;   // the node being held, so the node copy hook can tell it from the others
+    int follow, pending_pos;
+    uint64_t mismatch_ns, last_jump_ns;
+    uint32_t tried_area; unsigned tries;
 } st;
 
 extern uint64_t (*rt_native_ui_read64)(uint64_t);
@@ -57,9 +73,11 @@ static void init(void) {
     if (strcmp(rt_game_name, "2.0.0")) return;
     const char *peer = cfg_get("XCX_COOP_POSE_PEER"), *port = cfg_get("XCX_COOP_POSE_PORT");
     if ((!peer || !*peer) && (!port || !*port)) return;
+    const char *fol = cfg_get("XCX_COOP_FOLLOW");
+    st.follow = fol && !strcmp(fol, "1");
     if (coop_link_open(peer && *peer ? peer : NULL, port && *port ? (unsigned)atoi(port) : 0)) {
         st.active = 1;
-        rt_log("online co-op: pose link on, peer %s, local port %s", peer && *peer ? peer : "-", port && *port ? port : "-");
+        rt_log("online co-op: pose link on, peer %s, local port %s, follow %d", peer && *peer ? peer : "-", port && *port ? port : "-", st.follow);
     }
 }
 
@@ -75,7 +93,59 @@ static unsigned character_nodes(uint64_t nodes[2]) {
     return n;
 }
 
-static void tick(void) {
+// The table row that enters an area. From the sweep of 199 rows: the area word is the row minus 24 for rows 29 to 101 and the row minus
+// 27 for rows 219 to 410. Areas outside both ranges are not known, and 0 is returned.
+static unsigned row_for_area(uint32_t area) {
+    if (area >= 5 && area <= 77) return area + 24;
+    if (area >= 192 && area <= 383) return area + 27;
+    return 0;
+}
+
+static void jump_to_row(Cpu *c, unsigned row) {
+    uint64_t p = rt_native_ui_read64(JUMP_MANAGER_PTR), mgr = p ? rt_native_ui_read64(p) : 0;
+    if (!readable_writable(mgr, 0x40)) { rt_log("online co-op: follow: the jump manager is not readable"); return; }
+    Cpu saved = *c;
+    rt_call(c, JUMP_EXECUTOR, 5, mgr, 0ull, 0ull, (uint64_t)row, 1ull);
+    *c = saved;
+    rt_log("online co-op: follow: jumped to the entry of row %u", row);
+}
+
+// The request object the game's own scripts fill: area words at +0x14 and +0x18, the entry at +0x34 (bit 31: use the position), the
+// position at +0x20 and the heading at +0x30, and bits 0 and 1 of the flags at +0x10 ask for the jump.
+static void jump_to_position(Cpu *c, uint32_t area, uint32_t area2, const float pos[3], const float from[3]) {
+    uint64_t h = rt_native_ui_read64(JUMP_REQUEST_PTR), obj = h ? rt_native_ui_read64(h) : 0;
+    if (!readable_writable(obj, 0x40)) { rt_log("online co-op: follow: the jump request is not readable"); return; }
+    ST32(obj + 0x14, area); ST32(obj + 0x18, area2); ST32(obj + 0x34, 0x80000000u);
+    for (int k = 0; k < 3; ++k) putf(obj + 0x20 + 4 * k, pos[k]);
+    putf(obj + 0x30, 0.0f);
+    ST32(obj + 0x10, (uint32_t)LD32(obj + 0x10) | 3u);
+    Cpu saved = *c;
+    rt_call(c, JUMP_RUNNER, 1, obj);
+    *c = saved;
+    rt_log("online co-op: follow: moved from %.1f, %.1f, %.1f to the other player's position %.1f, %.1f, %.1f", from[0], from[1], from[2], pos[0], pos[1], pos[2]);
+}
+
+// With the follow setting on: the other player has been in another area for a while, so this game goes there, and then to the same spot.
+static void follow_remote(Cpu *c, uint64_t now, int fresh, int have_area, uint32_t area, uint32_t area2, const float from[3]) {
+    int same = fresh && have_area && st.remote.area == area && st.remote.area2 == area2;
+    if (!fresh || !have_area || same) st.mismatch_ns = 0;
+    if (fresh && have_area && !same) {
+        if (!st.mismatch_ns) st.mismatch_ns = now;
+        if (st.tried_area != st.remote.area) { st.tried_area = st.remote.area; st.tries = 0; }
+        if (now - st.mismatch_ns > MISMATCH_NS && now - st.last_jump_ns > JUMP_GAP_NS && st.tries < JUMP_TRIES) {
+            unsigned row = row_for_area(st.remote.area);
+            if (!row) { st.tries = JUMP_TRIES; rt_log("online co-op: follow: no entry is known for area %u", st.remote.area); return; }
+            ++st.tries; st.last_jump_ns = now; st.pending_pos = 1;
+            rt_log("online co-op: follow: the other player is in area %u/%u, this game in %u/%u", st.remote.area, st.remote.area2, area, area2);
+            jump_to_row(c, row);
+        }
+    } else if (same && st.pending_pos && now - st.last_jump_ns > POS_JUMP_GAP_NS) {
+        st.pending_pos = 0;
+        jump_to_position(c, area, area2, st.remote.pos, from);
+    }
+}
+
+static void tick(Cpu *c) {
     uint64_t now = kern_now_ns();
     uint64_t nodes[2] = {0, 0};
     unsigned n = character_nodes(nodes);
@@ -113,9 +183,15 @@ static void tick(void) {
                have_area && st.remote.area == area && st.remote.area2 == area2, st.have_remote && now - st.remote_ns < STALE_NS, n >= 2);
     }
     st.holding = shown;
+    if (st.follow) {
+        float here[3] = {0, 0, 0};
+        if (n >= 1) for (int k = 0; k < 3; ++k) here[k] = getf(nodes[0] + NODE_POS + 4 * k);
+        follow_remote(c, now, st.have_remote && now - st.remote_ns < STALE_NS, have_area, area, area2, here);
+    }
     if (now - st.last_log_ns >= 5000000000ull) {
         st.last_log_ns = now;
-        rt_log("online co-op: sent %u, received %u, rejected %u, area %u/%u", st.sent, st.received, st.rejected, area, area2);
+        rt_log("online co-op: sent %u, received %u, rejected %u, area %u/%u, player at %.1f, %.1f, %.1f", st.sent, st.received, st.rejected, area, area2,
+               n >= 1 ? getf(nodes[0] + NODE_POS) : 0.0f, n >= 1 ? getf(nodes[0] + NODE_POS + 4) : 0.0f, n >= 1 ? getf(nodes[0] + NODE_POS + 8) : 0.0f);
     }
 }
 
@@ -129,7 +205,7 @@ static void node_copy(Cpu *c) {
 int rt_online_coop_hook(unsigned id, Cpu *c) {
     if (!st.init) init();
     if (!st.active) return 0;
-    if (id == HOOK_COOP_TICK) tick();
+    if (id == HOOK_COOP_TICK) tick(c);
     else if (id == HOOK_COOP_NODE_COPY) node_copy(c);
     return 0;
 }

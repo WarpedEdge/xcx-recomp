@@ -18,6 +18,8 @@ Right now it can host and join a session on your own machine (loopback), pass a 
 
 Two games can show where the other player stands. Set `XCX_COOP_POSE_PORT=<port>` to listen and `XCX_COOP_POSE_PEER=<ip>:<port>` to say where to send, as environment variables or as `COOP_POSE_PORT` and `COOP_POSE_PEER` in `xcx.ini`. Each game then sends its player's position about 20 times a second and holds the other player's position on its second party member, as long as you're both in the same area.
 
+`XCX_COOP_FOLLOW=1` (or `COOP_FOLLOW` in `xcx.ini`) is for tests and is off by default. When the other player has been in another area for 3 seconds, this game jumps to that area through the game's own jump table, then moves the player to the other player's position. It tries three times for each area and knows the entry rows for the areas from 5 to 77 and from 192 to 383. A joining action the player chooses will replace it.
+
 Without these settings nothing is sent and no port is opened. It only works on the supported 2.0.0 build, and it has only been run on Linux so far. The hooks it uses are `coop.tick` and `coop.node_copy` in `recomp/native_ui.py`, and the game side is `runtime/online_coop_adapter.c`.
 
 ## Build and test
