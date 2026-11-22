@@ -60,6 +60,7 @@ static struct {
     int have_remote, holding;
     uint64_t hold_node;   // the node being held, so the node copy hook can tell it from the others
     unsigned battle_state;
+    int remote_fight;       // the other player's last pose said they are in a fight
     float fight_start[3];   // where the player stood when the fight began
     int follow, pending_pos, hold_timer;
     unsigned timer_holds;
@@ -196,7 +197,7 @@ static void tick(Cpu *c) {
 
     if (n >= 1 && have_area && now - st.last_send_ns >= SEND_INTERVAL_NS) {
         st.last_send_ns = now;
-        CoopPose p = { ++st.seq, area, area2, { getf(nodes[0] + NODE_POS), getf(nodes[0] + NODE_POS + 4), getf(nodes[0] + NODE_POS + 8) }, {0} };
+        CoopPose p = { ++st.seq, area, area2, { getf(nodes[0] + NODE_POS), getf(nodes[0] + NODE_POS + 4), getf(nodes[0] + NODE_POS + 8) }, {0}, battle_state(nodes[0]) == 1 ? COOP_POSE_IN_FIGHT : 0u };
         for (int k = 0; k < 12; ++k) p.rot[k] = getf(nodes[0] + NODE_ROT + 4 * k);
         uint8_t msg[COOP_POSE_BYTES];
         coop_pose_encode(&p, msg);
@@ -212,6 +213,10 @@ static void tick(Cpu *c) {
         // Datagrams can arrive late or twice; an older number than the one shown is dropped.
         if (st.have_remote && (int32_t)(p.seq - st.remote.seq) <= 0) continue;
         st.remote = p; st.remote_ns = now; st.have_remote = 1;
+        if (((p.flags & COOP_POSE_IN_FIGHT) != 0) != st.remote_fight) {
+            st.remote_fight = (p.flags & COOP_POSE_IN_FIGHT) != 0;
+            rt_log("online co-op: the other player %s a fight", st.remote_fight ? "is in" : "is no longer in");
+        }
     }
 
     float here[3] = {0, 0, 0};

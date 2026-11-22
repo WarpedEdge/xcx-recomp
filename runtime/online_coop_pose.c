@@ -11,11 +11,12 @@ void coop_pose_encode(const CoopPose *p, uint8_t out[COOP_POSE_BYTES]) {
     put32(out, COOP_POSE_MAGIC); put32(out + 4, p->seq); put32(out + 8, p->area); put32(out + 12, p->area2);
     for (int k = 0; k < 3; ++k) putf(out + 16 + 4 * k, p->pos[k]);
     for (int k = 0; k < 12; ++k) putf(out + 28 + 4 * k, p->rot[k]);
+    put32(out + 76, p->flags);
 }
 
 int coop_pose_decode(const uint8_t *in, size_t n, CoopPose *p) {
-    if (n != COOP_POSE_BYTES || get32(in) != COOP_POSE_MAGIC) return 0;
-    CoopPose q = { get32(in + 4), get32(in + 8), get32(in + 12), {0}, {0} };
+    if ((n != COOP_POSE_BYTES && n != COOP_POSE_BYTES_V1) || get32(in) != COOP_POSE_MAGIC) return 0;
+    CoopPose q = { get32(in + 4), get32(in + 8), get32(in + 12), {0}, {0}, n == COOP_POSE_BYTES ? get32(in + 76) : 0 };
     for (int k = 0; k < 3; ++k) q.pos[k] = getf(in + 16 + 4 * k);
     for (int k = 0; k < 12; ++k) q.rot[k] = getf(in + 28 + 4 * k);
     for (int k = 0; k < 3; ++k) if (!isfinite(q.pos[k]) || fabsf(q.pos[k]) > 100000.0f) return 0;

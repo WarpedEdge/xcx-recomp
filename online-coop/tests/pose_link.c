@@ -22,7 +22,7 @@ static size_t wait_recv(void *buf, size_t cap) {
 }
 
 int main(void) {
-    CoopPose p = { 7, 73, 73, { 1.5f, -2.25f, 300.0f }, {0} };
+    CoopPose p = { 7, 73, 73, { 1.5f, -2.25f, 300.0f }, {0}, COOP_POSE_IN_FIGHT };
     for (int k = 0; k < 12; ++k) p.rot[k] = 0.125f * (float)k;
     uint8_t wire[COOP_POSE_BYTES];
     coop_pose_encode(&p, wire);
@@ -30,11 +30,14 @@ int main(void) {
     assert(wire[0] == 0x50 && wire[1] == 0x58 && wire[2] == 0x43 && wire[3] == 0x58 && wire[4] == 7 && wire[8] == 73);
     CoopPose q;
     assert(coop_pose_decode(wire, sizeof wire, &q));
-    assert(q.seq == 7 && q.area == 73 && q.area2 == 73 && q.pos[0] == 1.5f && q.pos[1] == -2.25f && q.pos[2] == 300.0f && q.rot[11] == 1.375f);
+    assert(q.seq == 7 && q.area == 73 && q.area2 == 73 && q.pos[0] == 1.5f && q.pos[1] == -2.25f && q.pos[2] == 300.0f && q.rot[11] == 1.375f && q.flags == COOP_POSE_IN_FIGHT);
+    // An older build sends 76 bytes without the flags: accepted, flags 0.
+    CoopPose old;
+    assert(coop_pose_decode(wire, COOP_POSE_BYTES_V1, &old) && old.seq == 7 && old.flags == 0 && old.pos[2] == 300.0f);
     // Anything that is not exactly one good message is refused and leaves the output alone.
     CoopPose keep = q;
     uint8_t bad[COOP_POSE_BYTES + 1]; memcpy(bad, wire, sizeof wire); bad[sizeof wire] = 0;
-    assert(!coop_pose_decode(bad, sizeof bad, &q) && !coop_pose_decode(wire, sizeof wire - 1, &q) && !coop_pose_decode(wire, 0, &q));
+    assert(!coop_pose_decode(bad, sizeof bad, &q) && !coop_pose_decode(wire, sizeof wire - 1, &q) && !coop_pose_decode(wire, COOP_POSE_BYTES_V1 + 1, &q) && !coop_pose_decode(wire, 0, &q));
     memcpy(bad, wire, sizeof wire); bad[0] ^= 1; assert(!coop_pose_decode(bad, sizeof wire, &q));
     for (int field = 0; field < 15; ++field) {
         float values[] = { NAN, INFINITY, -INFINITY, 100001.0f, -100001.0f };
