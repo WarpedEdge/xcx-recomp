@@ -163,9 +163,10 @@ static void hold_countdown(void) {
     putf(obj + 0xc, COUNTDOWN_START);
 }
 
-// The battle state of a character node: the node points at its battle object at +0x1e0 and the state is the word at +0x34. The game's own
-// check for being in a battle (f_70003d8330) takes this node's object and counts state 3 as in a battle and state 1 as a special case.
-// At rest it reads 2. Returns 99 when the object cannot be read. State 3 has not been seen in a fight yet.
+// The battle state of a character node: the node points at its battle object at +0x1e0 and the state is the word at +0x34. At rest it
+// reads 2; in a fight run it read 1 from the start of the fight until after the player went down and the party was put back. The game's own
+// check for being in a battle (f_70003d8330) answers differently for 1, for 3 and for the rest; 3 has not been seen. Returns 99 when the
+// object cannot be read.
 #define NODE_BATTLE 0x1e0
 #define BATTLE_STATE 0x34
 static unsigned battle_state(uint64_t node) {
