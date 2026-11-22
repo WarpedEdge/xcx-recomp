@@ -59,6 +59,7 @@ static struct {
     CoopPose remote;
     int have_remote, holding;
     uint64_t hold_node;   // the node being held, so the node copy hook can tell it from the others
+    unsigned battle_state;
     int follow, pending_pos, hold_timer;
     unsigned timer_holds;
     uint64_t mismatch_ns, last_jump_ns;
@@ -162,6 +163,16 @@ static void hold_countdown(void) {
     putf(obj + 0xc, COUNTDOWN_START);
 }
 
+// The battle state of a character node: the node points at its battle object at +0x1e0 and the state is the word at +0x34. The game's own
+// check for being in a battle (f_70003d8330) takes this node's object and counts state 3 as in a battle and state 1 as a special case.
+// At rest it reads 2. Returns 99 when the object cannot be read. State 3 has not been seen in a fight yet.
+#define NODE_BATTLE 0x1e0
+#define BATTLE_STATE 0x34
+static unsigned battle_state(uint64_t node) {
+    uint64_t bp = rt_native_ui_read64(node + NODE_BATTLE);
+    return readable_writable(bp, BATTLE_STATE + 4) ? (unsigned)LD32(bp + BATTLE_STATE) : 99u;
+}
+
 static void tick(Cpu *c) {
     uint64_t now = kern_now_ns();
     uint64_t nodes[2] = {0, 0};
@@ -205,6 +216,13 @@ static void tick(Cpu *c) {
         float here[3] = {0, 0, 0};
         if (n >= 1) for (int k = 0; k < 3; ++k) here[k] = getf(nodes[0] + NODE_POS + 4 * k);
         follow_remote(c, now, st.have_remote && now - st.remote_ns < STALE_NS, have_area, area, area2, here);
+    }
+    if (n >= 1) {
+        unsigned bs = battle_state(nodes[0]);
+        if (bs != st.battle_state) {
+            rt_log("online co-op: the player's battle state changed from %u to %u", st.battle_state, bs);
+            st.battle_state = bs;
+        }
     }
     if (now - st.last_log_ns >= 5000000000ull) {
         st.last_log_ns = now;
