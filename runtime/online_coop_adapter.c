@@ -1,6 +1,6 @@
 // Shows another player's position in this game. Each pass of the game's main loop the local player's node position and the two
 // area words go out as a pose message, and the newest pose from the peer is held on the second character node (a party member), so
-// it stands where the other player stands. Positions are only shown when both players are in the same area.
+// it stands where the other player stands. Positions are only shown when both players are in the same area (the same area numbers, or within 400 units).
 //
 // Settings (xcx.ini or the environment):
 //   XCX_COOP_POSE_PEER=<ipv4>:<port>   where to send this game's pose
@@ -136,9 +136,20 @@ static void jump_to_position(Cpu *c, uint32_t area, uint32_t area2, const float 
     rt_log("online co-op: follow: moved from %.1f, %.1f, %.1f to the other player's position %.1f, %.1f, %.1f", from[0], from[1], from[2], pos[0], pos[1], pos[2]);
 }
 
+// Two games count as in the same area when the area words match, or when the other player stands within NEAR_BLOCK of this player in the
+// world. A short walk can change the words (neighboring blocks of the same ground carry different ones: 73 and 83 were seen about 100 units
+// apart), and the stand-in must not vanish then. The rule needs a pose from the other player.
+#define NEAR_BLOCK 400.0f
+static int same_area(int have_area, uint32_t area, uint32_t area2, const float here[3]) {
+    if (!st.have_remote || !have_area) return 0;
+    if (st.remote.area == area && st.remote.area2 == area2) return 1;
+    float dx = st.remote.pos[0] - here[0], dz = st.remote.pos[2] - here[2];
+    return dx * dx + dz * dz < NEAR_BLOCK * NEAR_BLOCK;
+}
+
 // With the follow setting on: the other player has been in another area for a while, so this game goes there, and then to the same spot.
 static void follow_remote(Cpu *c, uint64_t now, int fresh, int have_area, uint32_t area, uint32_t area2, const float from[3]) {
-    int same = fresh && have_area && st.remote.area == area && st.remote.area2 == area2;
+    int same = fresh && same_area(have_area, area, area2, from);
     if (!fresh || !have_area || same) st.mismatch_ns = 0;
     if (fresh && have_area && !same) {
         if (!st.mismatch_ns) st.mismatch_ns = now;
@@ -203,20 +214,20 @@ static void tick(Cpu *c) {
         st.remote = p; st.remote_ns = now; st.have_remote = 1;
     }
 
-    int shown = st.have_remote && now - st.remote_ns < STALE_NS && have_area &&
-                st.remote.area == area && st.remote.area2 == area2 && n >= 2;
+    float here[3] = {0, 0, 0};
+    if (n >= 1) for (int k = 0; k < 3; ++k) here[k] = getf(nodes[0] + NODE_POS + 4 * k);
+    int same = same_area(have_area, area, area2, here);
+    int shown = st.have_remote && now - st.remote_ns < STALE_NS && same && n >= 2;
     if (shown) {
         st.hold_node = nodes[1];
         if (!st.holding) rt_log("online co-op: showing the other player's position");
     } else if (st.holding) {
         rt_log("online co-op: the other player's position is no longer shown (in the same area %d, recent %d, party member %d)",
-               have_area && st.remote.area == area && st.remote.area2 == area2, st.have_remote && now - st.remote_ns < STALE_NS, n >= 2);
+               same, st.have_remote && now - st.remote_ns < STALE_NS, n >= 2);
     }
     st.holding = shown;
     if (st.hold_timer && st.have_remote && now - st.remote_ns < STALE_NS) hold_countdown();
     if (st.follow) {
-        float here[3] = {0, 0, 0};
-        if (n >= 1) for (int k = 0; k < 3; ++k) here[k] = getf(nodes[0] + NODE_POS + 4 * k);
         follow_remote(c, now, st.have_remote && now - st.remote_ns < STALE_NS, have_area, area, area2, here);
     }
     if (n >= 1) {
