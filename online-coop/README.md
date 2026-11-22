@@ -22,6 +22,8 @@ Two games can show where the other player stands. Set `XCX_COOP_POSE_PORT=<port>
 
 While the other player is connected, the death countdown is held at its start value, so a downed player stays down. `XCX_COOP_TIMER=normal` (or `COOP_TIMER` in `xcx.ini`) lets the game's countdown run. It is the same hold that was checked in a separate test build; in this build it has fired once in a run, and a fight death has not been run with it yet.
 
+Teleport actions between the two games (ask to go to the other player, ask the other player to come, go now, move the other player here now, answer yes or no) use a small 32-byte control message over the same link; `online_coop_command` in `runtime/online_coop_adapter.h` is what a menu will call. The ask versions expire after 30 s, and a question waits while this player is in a fight the other is not in. Until the menu exists, `XCX_COOP_TEST_CMD=<go|bring|force_go|force_bring|accept|decline>@<seconds>` runs one action that many seconds after the first pass and `XCX_COOP_AUTO_ACCEPT=1` answers yes, for tests.
+
 Without these settings nothing is sent and no port is opened. It only works on the supported 2.0.0 build, and it has only been run on Linux so far. The hooks it uses are `coop.tick` and `coop.node_copy` in `recomp/native_ui.py`, and the game side is `runtime/online_coop_adapter.c`.
 
 ## Build and test

@@ -21,3 +21,26 @@ typedef struct {
 void coop_pose_encode(const CoopPose *p, uint8_t out[COOP_POSE_BYTES]);
 // 1 when n is COOP_POSE_BYTES or COOP_POSE_BYTES_V1 (flags 0), the magic matches and every float is finite and below 100000 in size; else 0 and *p is left alone.
 int coop_pose_decode(const uint8_t *in, size_t n, CoopPose *p);
+
+// The control message: one player asks the other to teleport, or answers. 32 bytes, little endian, one UDP datagram. The position and
+// area words are the sender's, so the receiver needs no pose to act on it.
+#define COOP_CTL_MAGIC 0x58435443u
+#define COOP_CTL_BYTES 32
+enum {
+    COOP_CTL_ASK_GO = 1,       // the sender asks to come to the receiver
+    COOP_CTL_ASK_BRING = 2,    // the sender asks the receiver to come to the sender
+    COOP_CTL_FORCE_BRING = 3,  // the receiver is moved to the sender with no question
+    COOP_CTL_ACCEPT_GO = 4,    // answer to ASK_GO: the sender of ASK_GO may come (the position is the answerer's)
+    COOP_CTL_ACCEPT_BRING = 5, // answer to ASK_BRING: the answerer is on the way
+    COOP_CTL_DECLINE = 6,      // answer to either question
+    COOP_CTL_KIND_MAX = 6
+};
+typedef struct {
+    uint32_t seq;      // counts up with every control message; the same number is sent three times, only the first is acted on
+    uint32_t kind;
+    uint32_t area, area2;
+    float pos[3];
+} CoopCtl;
+void coop_ctl_encode(const CoopCtl *m, uint8_t out[COOP_CTL_BYTES]);
+// 1 when n is exactly COOP_CTL_BYTES, the magic matches, the kind is known and the position is finite and below 100000 in size; else 0.
+int coop_ctl_decode(const uint8_t *in, size_t n, CoopCtl *m);

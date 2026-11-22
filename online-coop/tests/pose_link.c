@@ -50,6 +50,28 @@ int main(void) {
     }
     assert(!memcmp(&q, &keep, sizeof q));
 
+    // The control message.
+    CoopCtl cm = { 9, COOP_CTL_ASK_BRING, 73, 83, { -2664.0f, -51.1f, 6493.7f } };
+    uint8_t cw[COOP_CTL_BYTES];
+    coop_ctl_encode(&cm, cw);
+    assert(cw[0] == 0x43 && cw[1] == 0x54 && cw[2] == 0x43 && cw[3] == 0x58 && cw[4] == 9 && cw[8] == COOP_CTL_ASK_BRING);
+    CoopCtl cq;
+    assert(coop_ctl_decode(cw, sizeof cw, &cq) && cq.seq == 9 && cq.kind == COOP_CTL_ASK_BRING && cq.area == 73 && cq.area2 == 83 && cq.pos[0] == -2664.0f && cq.pos[2] == 6493.7f);
+    CoopCtl ckeep = cq;
+    assert(!coop_ctl_decode(cw, sizeof cw - 1, &cq) && !coop_ctl_decode(wire, sizeof wire, &cq) && !coop_pose_decode(cw, sizeof cw, &q));
+    uint8_t cbad[COOP_CTL_BYTES]; memcpy(cbad, cw, sizeof cw);
+    cbad[8] = 0; assert(!coop_ctl_decode(cbad, sizeof cbad, &cq));
+    cbad[8] = COOP_CTL_KIND_MAX + 1; assert(!coop_ctl_decode(cbad, sizeof cbad, &cq));
+    for (int field = 0; field < 3; ++field) {
+        float values[] = { NAN, INFINITY, 100001.0f, -100001.0f };
+        for (unsigned v = 0; v < sizeof values / sizeof *values; ++v) {
+            CoopCtl r = cm; r.pos[field] = values[v];
+            coop_ctl_encode(&r, cbad);
+            assert(!coop_ctl_decode(cbad, sizeof cbad, &cq));
+        }
+    }
+    assert(!memcmp(&cq, &ckeep, sizeof cq));
+
     // Two links on loopback: each sends to the other's port.
     assert(!coop_link_open("not an address", 0) && !coop_link_open("127.0.0.1:0", 0) && !coop_link_open("127.0.0.1:47011", 70000));
     uint8_t buf[COOP_POSE_BYTES + 1];

@@ -11,6 +11,9 @@
 //   XCX_COOP_FOLLOW=1                  off by default. When the other player has been in another area for 3 s, this game
 //                                      jumps to that area, then to the other player's position (for tests; a joining action
 //                                      the player chooses comes later)
+//   XCX_COOP_TEST_CMD=<name>@<seconds> one teleport action from the list in online_coop_adapter.h (go, bring, force_go,
+//                                      force_bring, accept, decline), run once that many seconds after the first pass (for tests)
+//   XCX_COOP_AUTO_ACCEPT=1             answer a teleport question with yes when it can be answered (for tests)
 #include "online_coop_adapter.h"
 #include "cfg.h"
 #include "host.h"
@@ -49,6 +52,9 @@ extern const char rt_game_name[];
 #define JUMP_GAP_NS 15000000000ull         // the shortest time between two jumps to another area
 #define POS_JUMP_GAP_NS 4000000000ull      // after the area jump, the time to let the area load before the position jump
 #define JUMP_TRIES 3                       // area jumps per area the other player is in
+#define ASK_TIMEOUT_NS 30000000000ull      // a teleport question that nobody answered is dropped after this
+#define GO_TIMEOUT_NS 30000000000ull       // a teleport that has not landed after this is dropped
+#define GO_OFFSET 2.0f                     // a teleport lands this far to the side of the target, not inside the other character
 
 enum { HOOK_COOP_TICK = 11, HOOK_COOP_NODE_COPY = 12 };
 
@@ -66,6 +72,14 @@ static struct {
     unsigned timer_holds;
     uint64_t mismatch_ns, last_jump_ns;
     uint32_t tried_area; unsigned tries;
+    // This game's player as of the last pass, for the teleport actions.
+    int me_ok; uint32_t me_area, me_area2; float me_pos[3];
+    unsigned ctl_seq, ctl_last_seq; int have_ctl_seq;
+    unsigned ask_kind; uint64_t ask_ns;              // the question this game asked and waits for the answer to
+    unsigned prompt_kind; uint64_t prompt_ns; CoopCtl prompt;   // the question the other player asked
+    int go_active, go_jumped; uint64_t go_ns; uint32_t go_area, go_area2; float go_pos[3];   // a teleport under way
+    unsigned cmd;                                    // a command from outside, taken by the next pass
+    int auto_accept; unsigned test_cmd; uint64_t test_at_ns, first_tick_ns;
 } st;
 
 extern uint64_t (*rt_native_ui_read64)(uint64_t);
@@ -85,6 +99,16 @@ static void init(void) {
     if ((!peer || !*peer) && (!port || !*port)) return;
     const char *fol = cfg_get("XCX_COOP_FOLLOW");
     st.follow = fol && !strcmp(fol, "1");
+    const char *aa = cfg_get("XCX_COOP_AUTO_ACCEPT");
+    st.auto_accept = aa && !strcmp(aa, "1");
+    const char *tc = cfg_get("XCX_COOP_TEST_CMD");
+    if (tc && *tc) {
+        static const char *const names[] = { "", "go", "bring", "force_go", "force_bring", "accept", "decline" };
+        const char *at = strchr(tc, '@');
+        size_t len = at ? (size_t)(at - tc) : strlen(tc);
+        for (unsigned k = 1; k <= 6; ++k)
+            if (strlen(names[k]) == len && !strncmp(tc, names[k], len)) { st.test_cmd = k; st.test_at_ns = at ? (uint64_t)(atof(at + 1) * 1e9) : 0; }
+    }
     const char *tm = cfg_get("XCX_COOP_TIMER");
     st.hold_timer = !(tm && !strcmp(tm, "normal"));
     if (coop_link_open(peer && *peer ? peer : NULL, port && *port ? (unsigned)atoi(port) : 0)) {
@@ -168,6 +192,96 @@ static void follow_remote(Cpu *c, uint64_t now, int fresh, int have_area, uint32
     }
 }
 
+static int remote_fresh(uint64_t now) { return st.have_remote && now - st.remote_ns < STALE_NS; }
+
+static void send_ctl(unsigned kind) {
+    if (!st.me_ok) return;
+    CoopCtl m = { ++st.ctl_seq, kind, st.me_area, st.me_area2, { st.me_pos[0], st.me_pos[1], st.me_pos[2] } };
+    uint8_t w[COOP_CTL_BYTES];
+    coop_ctl_encode(&m, w);
+    for (int i = 0; i < 3; ++i) coop_link_send(w, sizeof w);   // the same number three times: a lost datagram is not the end of it
+}
+
+// A teleport to a place in the world: the same area, by the position request, or another area, by its entry row and then the position request.
+static void start_go(uint64_t now, uint32_t area, uint32_t area2, const float pos[3], const char *why) {
+    st.go_active = 1; st.go_jumped = 0; st.go_ns = now; st.go_area = area; st.go_area2 = area2;
+    st.go_pos[0] = pos[0] + GO_OFFSET; st.go_pos[1] = pos[1]; st.go_pos[2] = pos[2];
+    rt_log("online co-op: teleport started (%s), to %.1f, %.1f, %.1f in area %u/%u", why, st.go_pos[0], st.go_pos[1], st.go_pos[2], area, area2);
+}
+
+static void go_step(Cpu *c, uint64_t now) {
+    if (!st.go_active || !st.me_ok) return;
+    if (now - st.go_ns > GO_TIMEOUT_NS) { st.go_active = 0; rt_log("online co-op: teleport dropped, it did not land in time"); return; }
+    float dx = st.go_pos[0] - st.me_pos[0], dz = st.go_pos[2] - st.me_pos[2];
+    int here = (st.go_area == st.me_area && st.go_area2 == st.me_area2) || dx * dx + dz * dz < NEAR_BLOCK * NEAR_BLOCK;
+    if (here) {
+        if (st.go_jumped && now - st.last_jump_ns <= POS_JUMP_GAP_NS) return;   // let the area load first
+        st.go_active = 0;
+        jump_to_position(c, st.go_area, st.go_area2, st.go_pos, st.me_pos);
+    } else if (!st.go_jumped) {
+        unsigned row = row_for_area(st.go_area);
+        if (!row) { st.go_active = 0; rt_log("online co-op: teleport dropped, no entry is known for area %u", st.go_area); return; }
+        st.go_jumped = 1; st.last_jump_ns = now;
+        jump_to_row(c, row);
+    }
+}
+
+static void run_command(unsigned cmd, uint64_t now) {
+    switch (cmd) {
+    case OC_CMD_GO: case OC_CMD_BRING:
+        if (!remote_fresh(now)) { rt_log("online co-op: no other player to ask"); break; }
+        send_ctl(cmd == OC_CMD_GO ? COOP_CTL_ASK_GO : COOP_CTL_ASK_BRING);
+        st.ask_kind = cmd == OC_CMD_GO ? COOP_CTL_ASK_GO : COOP_CTL_ASK_BRING; st.ask_ns = now;
+        rt_log("online co-op: asked the other player to %s", cmd == OC_CMD_GO ? "let you come" : "come to you");
+        break;
+    case OC_CMD_FORCE_GO:
+        if (!remote_fresh(now)) { rt_log("online co-op: no other player to go to"); break; }
+        start_go(now, st.remote.area, st.remote.area2, st.remote.pos, "forced, to the other player");
+        break;
+    case OC_CMD_FORCE_BRING:
+        if (!remote_fresh(now)) { rt_log("online co-op: no other player to move"); break; }
+        send_ctl(COOP_CTL_FORCE_BRING);
+        rt_log("online co-op: moved the other player to you");
+        break;
+    case OC_CMD_ACCEPT:
+        if (!st.prompt_kind) { rt_log("online co-op: no question to answer"); break; }
+        if (st.prompt_kind == COOP_CTL_ASK_GO) send_ctl(COOP_CTL_ACCEPT_GO);
+        else { start_go(now, st.prompt.area, st.prompt.area2, st.prompt.pos, "accepted, to the other player"); send_ctl(COOP_CTL_ACCEPT_BRING); }
+        st.prompt_kind = 0;
+        break;
+    case OC_CMD_DECLINE:
+        if (!st.prompt_kind) { rt_log("online co-op: no question to answer"); break; }
+        send_ctl(COOP_CTL_DECLINE);
+        st.prompt_kind = 0;
+        break;
+    }
+}
+
+void online_coop_command(unsigned cmd) { __atomic_store_n(&st.cmd, cmd, __ATOMIC_RELEASE); }
+
+static void handle_ctl(const CoopCtl *m, uint64_t now) {
+    if (st.have_ctl_seq && (int32_t)(m->seq - st.ctl_last_seq) <= 0) return;   // the second and third copy, or a late one
+    st.ctl_last_seq = m->seq; st.have_ctl_seq = 1;
+    switch (m->kind) {
+    case COOP_CTL_ASK_GO: case COOP_CTL_ASK_BRING:
+        st.prompt = *m; st.prompt_kind = m->kind; st.prompt_ns = now;
+        rt_log("online co-op: the other player asks %s", m->kind == COOP_CTL_ASK_GO ? "to come to you" : "you to come to them");
+        break;
+    case COOP_CTL_FORCE_BRING:
+        start_go(now, m->area, m->area2, m->pos, "forced by the other player");
+        break;
+    case COOP_CTL_ACCEPT_GO:
+        if (st.ask_kind == COOP_CTL_ASK_GO && now - st.ask_ns < ASK_TIMEOUT_NS) { st.ask_kind = 0; start_go(now, m->area, m->area2, m->pos, "the other player said yes"); }
+        break;
+    case COOP_CTL_ACCEPT_BRING:
+        if (st.ask_kind == COOP_CTL_ASK_BRING) { st.ask_kind = 0; rt_log("online co-op: the other player is coming"); }
+        break;
+    case COOP_CTL_DECLINE:
+        if (st.ask_kind) { st.ask_kind = 0; rt_log("online co-op: the other player said no"); }
+        break;
+    }
+}
+
 // While the countdown runs the float is put back to its start value every pass, so it never reaches zero.
 static void hold_countdown(void) {
     uint64_t obj = rt_native_ui_read64(COUNTDOWN_PTR);
@@ -195,6 +309,13 @@ static void tick(Cpu *c) {
     int have_area = readable_writable(AREA_WORD, 8);
     if (have_area) { area = (uint32_t)LD32(AREA_WORD); area2 = (uint32_t)LD32(AREA_WORD2); }
 
+    st.me_ok = n >= 1 && have_area;
+    if (st.me_ok) {
+        st.me_area = area; st.me_area2 = area2;
+        for (int k = 0; k < 3; ++k) st.me_pos[k] = getf(nodes[0] + NODE_POS + 4 * k);
+    }
+    if (!st.first_tick_ns) st.first_tick_ns = now;
+
     if (n >= 1 && have_area && now - st.last_send_ns >= SEND_INTERVAL_NS) {
         st.last_send_ns = now;
         CoopPose p = { ++st.seq, area, area2, { getf(nodes[0] + NODE_POS), getf(nodes[0] + NODE_POS + 4), getf(nodes[0] + NODE_POS + 8) }, {0}, battle_state(nodes[0]) == 1 ? COOP_POSE_IN_FIGHT : 0u };
@@ -207,6 +328,11 @@ static void tick(Cpu *c) {
     uint8_t msg[COOP_POSE_BYTES + 1];
     size_t got;
     while ((got = coop_link_recv(msg, sizeof msg)) != 0) {
+        CoopCtl cm;
+        if (got == COOP_CTL_BYTES) {
+            if (coop_ctl_decode(msg, got, &cm)) handle_ctl(&cm, now); else ++st.rejected;
+            continue;
+        }
         CoopPose p;
         if (!coop_pose_decode(msg, got, &p)) { ++st.rejected; continue; }
         ++st.received;
@@ -232,6 +358,17 @@ static void tick(Cpu *c) {
     }
     st.holding = shown;
     if (st.hold_timer && st.have_remote && now - st.remote_ns < STALE_NS) hold_countdown();
+    {
+        unsigned cmd = __atomic_exchange_n(&st.cmd, 0u, __ATOMIC_ACQ_REL);
+        if (st.test_cmd && now - st.first_tick_ns >= st.test_at_ns) { cmd = st.test_cmd; st.test_cmd = 0; }
+        if (cmd) run_command(cmd, now);
+        if (st.ask_kind && now - st.ask_ns > ASK_TIMEOUT_NS) { st.ask_kind = 0; rt_log("online co-op: nobody answered the question"); }
+        if (st.prompt_kind && now - st.prompt_ns > ASK_TIMEOUT_NS) { st.prompt_kind = 0; rt_log("online co-op: a question from the other player ran out"); }
+        // A question waits while this player is in a fight the other player is not in.
+        int can_answer = !(st.battle_state == 1 && !st.remote_fight);
+        if (st.prompt_kind && st.auto_accept && can_answer) run_command(OC_CMD_ACCEPT, now);
+        go_step(c, now);
+    }
     if (st.follow) {
         follow_remote(c, now, st.have_remote && now - st.remote_ns < STALE_NS, have_area, area, area2, here);
     }

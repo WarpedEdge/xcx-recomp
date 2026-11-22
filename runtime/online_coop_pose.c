@@ -24,3 +24,17 @@ int coop_pose_decode(const uint8_t *in, size_t n, CoopPose *p) {
     *p = q;
     return 1;
 }
+
+void coop_ctl_encode(const CoopCtl *m, uint8_t out[COOP_CTL_BYTES]) {
+    put32(out, COOP_CTL_MAGIC); put32(out + 4, m->seq); put32(out + 8, m->kind); put32(out + 12, m->area); put32(out + 16, m->area2);
+    for (int k = 0; k < 3; ++k) putf(out + 20 + 4 * k, m->pos[k]);
+}
+
+int coop_ctl_decode(const uint8_t *in, size_t n, CoopCtl *m) {
+    if (n != COOP_CTL_BYTES || get32(in) != COOP_CTL_MAGIC) return 0;
+    CoopCtl q = { get32(in + 4), get32(in + 8), get32(in + 12), get32(in + 16), {0} };
+    if (q.kind < 1 || q.kind > COOP_CTL_KIND_MAX) return 0;
+    for (int k = 0; k < 3; ++k) { q.pos[k] = getf(in + 20 + 4 * k); if (!isfinite(q.pos[k]) || fabsf(q.pos[k]) > 100000.0f) return 0; }
+    *m = q;
+    return 1;
+}
