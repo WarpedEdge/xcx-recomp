@@ -60,6 +60,7 @@ static struct {
     int have_remote, holding;
     uint64_t hold_node;   // the node being held, so the node copy hook can tell it from the others
     unsigned battle_state;
+    float fight_start[3];   // where the player stood when the fight began
     int follow, pending_pos, hold_timer;
     unsigned timer_holds;
     uint64_t mismatch_ns, last_jump_ns;
@@ -221,7 +222,13 @@ static void tick(Cpu *c) {
     if (n >= 1) {
         unsigned bs = battle_state(nodes[0]);
         if (bs != st.battle_state) {
-            rt_log("online co-op: the player's battle state changed from %u to %u", st.battle_state, bs);
+            float at[3] = { getf(nodes[0] + NODE_POS), getf(nodes[0] + NODE_POS + 4), getf(nodes[0] + NODE_POS + 8) };
+            if (bs == 1) memcpy(st.fight_start, at, sizeof at);
+            if (st.battle_state == 1) {
+                float dx = at[0] - st.fight_start[0], dz = at[2] - st.fight_start[2];
+                rt_log("online co-op: the player's battle state changed from %u to %u, %.1f from where the fight began, now at %.1f, %.1f, %.1f", st.battle_state, bs, sqrtf(dx * dx + dz * dz), at[0], at[1], at[2]);
+            } else
+                rt_log("online co-op: the player's battle state changed from %u to %u, at %.1f, %.1f, %.1f", st.battle_state, bs, at[0], at[1], at[2]);
             st.battle_state = bs;
         }
     }
