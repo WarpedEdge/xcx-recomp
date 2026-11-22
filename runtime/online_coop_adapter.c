@@ -6,6 +6,8 @@
 //   XCX_COOP_POSE_PEER=<ipv4>:<port>   where to send this game's pose
 //   XCX_COOP_POSE_PORT=<port>          the local UDP port to listen on
 // Either one turns the pose link on. Without both of them nothing is sent or shown.
+//   XCX_COOP_TIMER=normal              the death countdown runs as in the game. Without it the countdown is held while the other
+//                                      player is connected (a downed player stays down until the party revives them or all are down)
 //   XCX_COOP_FOLLOW=1                  off by default. When the other player has been in another area for 3 s, this game
 //                                      jumps to that area, then to the other player's position (for tests; a joining action
 //                                      the player chooses comes later)
@@ -39,6 +41,10 @@ extern const char rt_game_name[];
 #define JUMP_RUNNER (MAIN + 0x2f7d20)
 #define JUMP_MANAGER_PTR 0x7001d58318ull   // points at a pointer to the manager
 #define JUMP_REQUEST_PTR 0x7001d587d0ull   // points at a pointer to the request object
+// The death countdown (research note 19): a pointer at COUNTDOWN_PTR to an object whose state word at +8 is 3 while the countdown runs and whose
+// float at +0xc counts down from 30.0.
+#define COUNTDOWN_PTR 0x7001f91e30ull
+#define COUNTDOWN_START 30.0f
 #define MISMATCH_NS 3000000000ull          // how long the other player is in another area before this game follows
 #define JUMP_GAP_NS 15000000000ull         // the shortest time between two jumps to another area
 #define POS_JUMP_GAP_NS 4000000000ull      // after the area jump, the time to let the area load before the position jump
@@ -53,7 +59,8 @@ static struct {
     CoopPose remote;
     int have_remote, holding;
     uint64_t hold_node;   // the node being held, so the node copy hook can tell it from the others
-    int follow, pending_pos;
+    int follow, pending_pos, hold_timer;
+    unsigned timer_holds;
     uint64_t mismatch_ns, last_jump_ns;
     uint32_t tried_area; unsigned tries;
 } st;
@@ -75,6 +82,8 @@ static void init(void) {
     if ((!peer || !*peer) && (!port || !*port)) return;
     const char *fol = cfg_get("XCX_COOP_FOLLOW");
     st.follow = fol && !strcmp(fol, "1");
+    const char *tm = cfg_get("XCX_COOP_TIMER");
+    st.hold_timer = !(tm && !strcmp(tm, "normal"));
     if (coop_link_open(peer && *peer ? peer : NULL, port && *port ? (unsigned)atoi(port) : 0)) {
         st.active = 1;
         rt_log("online co-op: pose link on, peer %s, local port %s, follow %d", peer && *peer ? peer : "-", port && *port ? port : "-", st.follow);
@@ -145,6 +154,14 @@ static void follow_remote(Cpu *c, uint64_t now, int fresh, int have_area, uint32
     }
 }
 
+// While the countdown runs the float is put back to its start value every pass, so it never reaches zero.
+static void hold_countdown(void) {
+    uint64_t obj = rt_native_ui_read64(COUNTDOWN_PTR);
+    if (!obj || !readable_writable(obj, 0x20) || (uint32_t)LD32(obj + 8) != 3 || getf(obj + 0xc) >= COUNTDOWN_START - 0.1f) return;
+    if (!st.timer_holds++) rt_log("online co-op: the death countdown is held");
+    putf(obj + 0xc, COUNTDOWN_START);
+}
+
 static void tick(Cpu *c) {
     uint64_t now = kern_now_ns();
     uint64_t nodes[2] = {0, 0};
@@ -183,6 +200,7 @@ static void tick(Cpu *c) {
                have_area && st.remote.area == area && st.remote.area2 == area2, st.have_remote && now - st.remote_ns < STALE_NS, n >= 2);
     }
     st.holding = shown;
+    if (st.hold_timer && st.have_remote && now - st.remote_ns < STALE_NS) hold_countdown();
     if (st.follow) {
         float here[3] = {0, 0, 0};
         if (n >= 1) for (int k = 0; k < 3; ++k) here[k] = getf(nodes[0] + NODE_POS + 4 * k);

@@ -20,6 +20,8 @@ Two games can show where the other player stands. Set `XCX_COOP_POSE_PORT=<port>
 
 `XCX_COOP_FOLLOW=1` (or `COOP_FOLLOW` in `xcx.ini`) is for tests and is off by default. When the other player has been in another area for 3 seconds, this game jumps to that area through the game's own jump table, then moves the player to the other player's position. It tries three times for each area and knows the entry rows for the areas from 5 to 77 and from 192 to 383. A joining action the player chooses will replace it.
 
+While the other player is connected, the death countdown is held at its start value, so a downed player stays down. `XCX_COOP_TIMER=normal` (or `COOP_TIMER` in `xcx.ini`) lets the game's countdown run. It is the same hold that was checked in a separate test build; in this build it has fired once in a run, and a fight death has not been run with it yet.
+
 Without these settings nothing is sent and no port is opened. It only works on the supported 2.0.0 build, and it has only been run on Linux so far. The hooks it uses are `coop.tick` and `coop.node_copy` in `recomp/native_ui.py`, and the game side is `runtime/online_coop_adapter.c`.
 
 ## Build and test
