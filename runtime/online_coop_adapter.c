@@ -13,6 +13,9 @@
 //                                      the player chooses comes later)
 //   XCX_COOP_TEST_CMD=<name>@<seconds> one teleport action from the list in online_coop_adapter.h (go, bring, force_go,
 //                                      force_bring, accept, decline), run once that many seconds after the first pass (for tests)
+//   XCX_COOP_JOIN=<distance>           off by default. While both players are in a fight and are this far apart or less (and more than 25 apart),
+//                                      the one who entered the fight later is moved next to the other (at most once every 20 s)
+//   XCX_COOP_TEST_FIGHT=<seconds>      report this player as in a fight from that many seconds after the first pass on (for tests)
 //   XCX_COOP_AUTO_ACCEPT=1             answer a teleport question with yes when it can be answered (for tests)
 #include "online_coop_adapter.h"
 #include "cfg.h"
@@ -54,6 +57,8 @@ extern const char rt_game_name[];
 #define JUMP_TRIES 3                       // area jumps per area the other player is in
 #define ASK_TIMEOUT_NS 30000000000ull      // a teleport question that nobody answered is dropped after this
 #define GO_TIMEOUT_NS 30000000000ull       // a teleport that has not landed after this is dropped
+#define JOIN_MIN 25.0f                     // closer than this and a joining player is already there
+#define JOIN_GAP_NS 20000000000ull         // the shortest time between two joins
 #define GO_OFFSET 2.0f                     // a teleport lands this far to the side of the target, not inside the other character
 
 enum { HOOK_COOP_TICK = 11, HOOK_COOP_NODE_COPY = 12 };
@@ -79,6 +84,7 @@ static struct {
     unsigned prompt_kind; uint64_t prompt_ns; CoopCtl prompt;   // the question the other player asked
     int go_active, go_jumped; uint64_t go_ns; uint32_t go_area, go_area2; float go_pos[3];   // a teleport under way
     unsigned cmd;                                    // a command from outside, taken by the next pass
+    float join_dist; uint64_t fight_since_ns, remote_fight_since_ns, last_join_ns; double test_fight_s;
     int auto_accept; unsigned test_cmd; uint64_t test_at_ns, first_tick_ns;
 } st;
 
@@ -99,6 +105,10 @@ static void init(void) {
     if ((!peer || !*peer) && (!port || !*port)) return;
     const char *fol = cfg_get("XCX_COOP_FOLLOW");
     st.follow = fol && !strcmp(fol, "1");
+    const char *jn = cfg_get("XCX_COOP_JOIN");
+    st.join_dist = jn && *jn ? (float)atof(jn) : 0.0f;
+    const char *tf = cfg_get("XCX_COOP_TEST_FIGHT");
+    st.test_fight_s = tf && *tf ? atof(tf) : -1.0;
     const char *aa = cfg_get("XCX_COOP_AUTO_ACCEPT");
     st.auto_accept = aa && !strcmp(aa, "1");
     const char *tc = cfg_get("XCX_COOP_TEST_CMD");
@@ -301,6 +311,12 @@ static unsigned battle_state(uint64_t node) {
     return readable_writable(bp, BATTLE_STATE + 4) ? (unsigned)LD32(bp + BATTLE_STATE) : 99u;
 }
 
+// The battle state, or a made-up 1 from the XCX_COOP_TEST_FIGHT time on.
+static unsigned local_battle_state(uint64_t node, uint64_t now) {
+    if (st.test_fight_s >= 0 && now - st.first_tick_ns >= (uint64_t)(st.test_fight_s * 1e9)) return 1;
+    return battle_state(node);
+}
+
 static void tick(Cpu *c) {
     uint64_t now = kern_now_ns();
     uint64_t nodes[2] = {0, 0};
@@ -318,7 +334,7 @@ static void tick(Cpu *c) {
 
     if (n >= 1 && have_area && now - st.last_send_ns >= SEND_INTERVAL_NS) {
         st.last_send_ns = now;
-        CoopPose p = { ++st.seq, area, area2, { getf(nodes[0] + NODE_POS), getf(nodes[0] + NODE_POS + 4), getf(nodes[0] + NODE_POS + 8) }, {0}, battle_state(nodes[0]) == 1 ? COOP_POSE_IN_FIGHT : 0u };
+        CoopPose p = { ++st.seq, area, area2, { getf(nodes[0] + NODE_POS), getf(nodes[0] + NODE_POS + 4), getf(nodes[0] + NODE_POS + 8) }, {0}, local_battle_state(nodes[0], now) == 1 ? COOP_POSE_IN_FIGHT : 0u };
         for (int k = 0; k < 12; ++k) p.rot[k] = getf(nodes[0] + NODE_ROT + 4 * k);
         uint8_t msg[COOP_POSE_BYTES];
         coop_pose_encode(&p, msg);
@@ -341,6 +357,7 @@ static void tick(Cpu *c) {
         st.remote = p; st.remote_ns = now; st.have_remote = 1;
         if (((p.flags & COOP_POSE_IN_FIGHT) != 0) != st.remote_fight) {
             st.remote_fight = (p.flags & COOP_POSE_IN_FIGHT) != 0;
+            if (st.remote_fight) st.remote_fight_since_ns = now;
             rt_log("online co-op: the other player %s a fight", st.remote_fight ? "is in" : "is no longer in");
         }
     }
@@ -367,16 +384,25 @@ static void tick(Cpu *c) {
         // A question waits while this player is in a fight the other player is not in.
         int can_answer = !(st.battle_state == 1 && !st.remote_fight);
         if (st.prompt_kind && st.auto_accept && can_answer) run_command(OC_CMD_ACCEPT, now);
+        if (st.join_dist > 0 && !st.go_active && st.me_ok && remote_fresh(now) && st.battle_state == 1 && st.remote_fight &&
+            st.fight_since_ns > st.remote_fight_since_ns + 1000000000ull && now - st.last_join_ns > JOIN_GAP_NS) {
+            float dx = st.remote.pos[0] - st.me_pos[0], dz = st.remote.pos[2] - st.me_pos[2], d = sqrtf(dx * dx + dz * dz);
+            if (d > JOIN_MIN && d <= st.join_dist) {
+                st.last_join_ns = now;
+                rt_log("online co-op: joining the other player's fight, %.1f away", d);
+                start_go(now, st.remote.area, st.remote.area2, st.remote.pos, "joining the fight");
+            }
+        }
         go_step(c, now);
     }
     if (st.follow) {
         follow_remote(c, now, st.have_remote && now - st.remote_ns < STALE_NS, have_area, area, area2, here);
     }
     if (n >= 1) {
-        unsigned bs = battle_state(nodes[0]);
+        unsigned bs = local_battle_state(nodes[0], now);
         if (bs != st.battle_state) {
             float at[3] = { getf(nodes[0] + NODE_POS), getf(nodes[0] + NODE_POS + 4), getf(nodes[0] + NODE_POS + 8) };
-            if (bs == 1) memcpy(st.fight_start, at, sizeof at);
+            if (bs == 1) { memcpy(st.fight_start, at, sizeof at); st.fight_since_ns = now; }
             if (st.battle_state == 1) {
                 float dx = at[0] - st.fight_start[0], dz = at[2] - st.fight_start[2];
                 rt_log("online co-op: the player's battle state changed from %u to %u, %.1f from where the fight began, now at %.1f, %.1f, %.1f", st.battle_state, bs, sqrtf(dx * dx + dz * dz), at[0], at[1], at[2]);
