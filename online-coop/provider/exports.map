@@ -1,0 +1,1 @@
+{ global: xcx_provider_query_v2; local: *; };
