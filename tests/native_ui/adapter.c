@@ -12,6 +12,7 @@
 volatile int g_fnprof;const char rt_game_name[]="2.0.0";
 void fnprof_hit(uint64_t a,uint64_t b,uint64_t c){(void)a;(void)b;(void)c;}
 void rt_dispatch(Cpu *c){(void)c;abort();}
+int rt_online_coop_hook(unsigned id,Cpu *c){(void)id;(void)c;return 0;} // the co-op add-on has its own tests (online-coop/tests)
 void rt_log(const char *s,...){(void)s;}
 static uint64_t fake_now=1000;uint64_t kern_now_ns(void){return fake_now;} // the toast hold is real time; the fixture moves it by hand
 #define TOAST_NS 4000000000ull

@@ -6,6 +6,7 @@
 #define MESSAGE_TEXT_STORAGE // test builds keep the one copy of the message row table here (runtime/message_text.h)
 #include "message_text.h"
 #include "mod_native_ui.h"
+#include "online_coop_adapter.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,7 +18,7 @@
 extern const char rt_game_name[];
 #define MAIN 0x7000000000ull
 enum { HOOK_STORY, HOOK_ONLINE, HOOK_FLAG, HOOK_SQUAD_IDLE, HOOK_SQUAD_INPUT, HOOK_SQUAD_STATE, HOOK_SQUAD_MESSAGE,
-       HOOK_DETAILS_ONLINE, HOOK_DETAILS_TIMER, HOOK_DETAILS_CLOSE, HOOK_ONLINE_READY };
+       HOOK_DETAILS_ONLINE, HOOK_DETAILS_TIMER, HOOK_DETAILS_CLOSE, HOOK_ONLINE_READY, HOOK_COOP_TICK, HOOK_COOP_NODE_COPY };
 enum { INPUT_CONFIRM = 4 };
 int rt_native_ui_capable(void) { return NATIVE_UI_HOOKS && !strcmp(rt_game_name, "2.0.0"); }
 static int readable_writable(uint64_t p, uint64_t n) {
@@ -519,6 +520,9 @@ static void online_caller_note(const char *query, uint64_t caller) {
     rt_log("native ui: the %s is asked by main+%#llx while a session is up (answered yes)", query, (unsigned long long)(caller - MAIN));
 }
 int rt_native_ui_hook(unsigned id, Cpu *c) {
+    // The co-op hooks run every pass of the main loop and at every node copy, so they are told apart before the capability check,
+    // which the add-on does once on its own.
+    if (id == HOOK_COOP_TICK || id == HOOK_COOP_NODE_COPY) return rt_online_coop_hook(id, c);
     if (!rt_native_ui_capable()) return 0;
     if (id == HOOK_ONLINE_READY) {
         // The online parameter object's "ready" query that every main-menu Online row's validator makes after the session query.

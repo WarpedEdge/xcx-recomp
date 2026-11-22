@@ -30,6 +30,11 @@ HOOKS = (
     # The game's "online state ready" query (the online parameter object's state), asked by each main-menu Online row's validator
     # right after the squad-session query. Answered for every caller while a mod reports a session; `caller` is one of its sites.
     (10, 'online.ready', 0xc8908, 0x838448),
+    # The online co-op add-on (runtime/online_coop_adapter.c). Both run on the game thread and never answer for the game: the original
+    # function runs after them. The tick is a function the main loop calls once a pass; the node copy is the game's copy of a character
+    # node's rotation and position, which is where a held position is put in. They have no guarded caller, so the field is 0.
+    (11, 'coop.tick', 0x410500, 0),
+    (12, 'coop.node_copy', 0x1ec150, 0),
 )
 NAMES = {name: hook_id for hook_id, name, _, _ in HOOKS}
 ENTRIES = {BASE + entry: hook_id for hook_id, _, entry, _ in HOOKS}
@@ -49,6 +54,7 @@ WORDS = {
     0xc8960: 0x9000ea28, 0x715e84: 0xd101c3ff, 0x8f0218: 0xa9be7bfd,
     0x715c80: 0x97e6cb38, 0x715ca0: 0x94000079, 0x715d74: 0x94076929,
     0xc8908: 0xa9be7bfd, 0x838444: 0x97e24131,
+    0x410500: 0xf000df08, 0x1ec150: 0xf9401c28,
 }
 
 

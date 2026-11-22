@@ -2,7 +2,7 @@
 
 This folder holds the add-on for playing the game together over a network. It is built as a Lua mod with a native provider, so it uses the mod page and the native Online screens from the mod system and doesn't change the game's own code.
 
-Right now it can host and join a session on your own machine (loopback), pass a party invite and echo messages between two peers. Sending positions, showing the other player and joining over the internet come later, one step at a time.
+Right now it can host and join a session on your own machine (loopback), pass a party invite and echo messages between two peers. Two games can also show each other's position (see Position link below). Joining over the internet comes later, one step at a time.
 
 ## Layout
 
@@ -14,6 +14,12 @@ Right now it can host and join a session on your own machine (loopback), pass a 
 | `tools/` | `build_provider.py` builds the provider and assembles a mod folder from `lua/`. `peer.cpp` is a small test peer. |
 | `tests/` | Tests for the message format, the party state, the pose reader, the network code, the provider and the Lua mod. |
 
+## Position link
+
+Two games can show where the other player stands. Set `XCX_COOP_POSE_PORT=<port>` to listen and `XCX_COOP_POSE_PEER=<ip>:<port>` to say where to send, as environment variables or as `COOP_POSE_PORT` and `COOP_POSE_PEER` in `xcx.ini`. Each game then sends its player's position about 20 times a second and holds the other player's position on its second party member, as long as you're both in the same area.
+
+Without these settings nothing is sent and no port is opened. It only works on the supported 2.0.0 build, and it has only been run on Linux so far. The hooks it uses are `coop.tick` and `coop.node_copy` in `recomp/native_ui.py`, and the game side is `runtime/online_coop_adapter.c`.
+
 ## Build and test
 
 Run these from this folder. Build output goes to `build/online-coop/` at the top of the repository.
@@ -22,7 +28,7 @@ Run these from this folder. Build output goes to `build/online-coop/` at the top
 make test
 ```
 
-builds the transport and runs the format, party, pose and network tests. They need only a C++17 compiler and Python.
+builds the transport and runs the format, party, pose, pose link and network tests. They need only a C and a C++17 compiler and Python.
 
 ```text
 python3 tests/dynamic/check.py

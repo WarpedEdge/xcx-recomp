@@ -32,13 +32,15 @@ class Validation(unittest.TestCase):
             with self.assertRaises(ValueError):
                 h.validate_patches(SimpleNamespace(sites={'main': {off: None}}))
     def test_hook_entries(self):
-        self.assertEqual(len(h.HOOKS), 11)
-        self.assertEqual(len({entry for _, _, entry, _ in h.HOOKS}), 11)
+        self.assertEqual(len(h.HOOKS), 13)
+        self.assertEqual(len({entry for _, _, entry, _ in h.HOOKS}), 13)
         self.assertIn(h.SQUAD_INPUT_ONLINE - 4, h.WORDS)   # the second guarded call site of the online query
         for hook_id, name, entry, caller in h.HOOKS:
             self.assertEqual(h.entry_hook(h.BASE + entry), f'if (rt_native_ui_hook({hook_id}, c)) return;')
             self.assertIn(entry, h.WORDS)
-            self.assertIn(caller - 4, h.WORDS)   # the call instruction that makes the guarded return address
+            # The call instruction that makes the guarded return address. The two online co-op hooks (11, 12) are not guarded and have no caller.
+            if hook_id < 11: self.assertIn(caller - 4, h.WORDS)
+            else: self.assertEqual(caller, 0)
         self.assertIsNone(h.entry_hook(h.BASE + 0x1234))
 
 if __name__ == '__main__': unittest.main()
