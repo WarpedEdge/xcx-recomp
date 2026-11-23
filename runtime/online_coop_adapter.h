@@ -19,3 +19,10 @@ enum {
     OC_CMD_DECLINE = 6        // answer the other player's question: no
 };
 void online_coop_command(unsigned cmd);
+
+// The squad session, as the native UI registry knows it (native_ui_adapter.c reads it each pass on the game thread). mode is the
+// squad details mode of the last report (MOD_NATIVE_MODE_CREATED 0, MOD_NATIVE_MODE_JOINED 1) or a negative number when no session is up;
+// code is the squad's passcode. A session opens the pose link on the ports coop_session_ports gives; no session closes it. A link set
+// by the XCX_COOP_POSE_* settings is left alone.
+void online_coop_session(int mode, const char *code);
+

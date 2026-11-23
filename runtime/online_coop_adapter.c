@@ -22,6 +22,7 @@
 #include "host.h"
 #include "online_coop_link.h"
 #include "online_coop_pose.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -86,6 +87,7 @@ static struct {
     unsigned cmd;                                    // a command from outside, taken by the next pass
     float join_dist; uint64_t fight_since_ns, remote_fight_since_ns, last_join_ns; double test_fight_s;
     int auto_accept; unsigned test_cmd; uint64_t test_at_ns, first_tick_ns;
+    int env_link, session_link, session_joined; char session_code[8];   // who opened the link: the settings or a squad session
 } st;
 
 extern uint64_t (*rt_native_ui_read64)(uint64_t);
@@ -98,11 +100,8 @@ static int readable_writable(uint64_t p, uint64_t n) {
 static float getf(uint64_t a) { uint32_t b = (uint32_t)LD32(a); float f; memcpy(&f, &b, 4); return f; }
 static void putf(uint64_t a, float f) { uint32_t b; memcpy(&b, &f, 4); ST32(a, b); }
 
-static void init(void) {
-    st.init = 1;
-    if (strcmp(rt_game_name, "2.0.0")) return;
-    const char *peer = cfg_get("XCX_COOP_POSE_PEER"), *port = cfg_get("XCX_COOP_POSE_PORT");
-    if ((!peer || !*peer) && (!port || !*port)) return;
+// The options that do not depend on how the link was opened.
+static void configure(void) {
     const char *fol = cfg_get("XCX_COOP_FOLLOW");
     st.follow = fol && !strcmp(fol, "1");
     const char *jn = cfg_get("XCX_COOP_JOIN");
@@ -121,10 +120,57 @@ static void init(void) {
     }
     const char *tm = cfg_get("XCX_COOP_TIMER");
     st.hold_timer = !(tm && !strcmp(tm, "normal"));
-    if (coop_link_open(peer && *peer ? peer : NULL, port && *port ? (unsigned)atoi(port) : 0)) {
+}
+
+// Opens the pose link for a squad session, or closes it when there is none. The settings' own link is not touched.
+static void session_set(int mode, const char *code) {
+    if (st.env_link) return;
+    int up = mode == 0 || mode == 1;
+    unsigned local = 0, peer = 0;
+    if (up && !coop_session_ports(mode == 1, code, &local, &peer)) {
+        if (st.session_code[0] != '!') { snprintf(st.session_code, sizeof st.session_code, "!"); rt_log("online co-op: the squad's passcode is not a loopback port, no pose link"); }
+        up = 0;
+    }
+    if (up) {
+        if (st.session_link && st.session_joined == (mode == 1) && !strcmp(st.session_code, code)) return;
+        char peer_addr[32];
+        snprintf(peer_addr, sizeof peer_addr, "127.0.0.1:%u", peer);
+        if (!coop_link_open(peer_addr, local)) return;
+        configure();
+        st.session_link = 1; st.session_joined = mode == 1; snprintf(st.session_code, sizeof st.session_code, "%s", code);
         st.active = 1;
+        rt_log("online co-op: squad session, pose link on, %s, local port %u, peer %s", mode == 1 ? "joined" : "created", local, peer_addr);
+    } else if (st.session_link) {
+        coop_link_close();
+        st.session_link = 0; st.session_code[0] = 0; st.active = 0;
+        st.have_remote = 0; st.holding = 0; st.remote_fight = 0; st.ask_kind = 0; st.prompt_kind = 0; st.go_active = 0;
+        rt_log("online co-op: the squad session ended, pose link off");
+    }
+}
+
+static void init(void) {
+    st.init = 1;
+    if (strcmp(rt_game_name, "2.0.0")) return;
+    const char *peer = cfg_get("XCX_COOP_POSE_PEER"), *port = cfg_get("XCX_COOP_POSE_PORT");
+    if ((!peer || !*peer) && (!port || !*port)) {
+        // A test stand-in for the squad screens: XCX_COOP_TEST_SESSION=host:<passcode> or join:<passcode> acts as if that session were up.
+        const char *ts = cfg_get("XCX_COOP_TEST_SESSION");
+        if (ts && !strncmp(ts, "host:", 5)) session_set(0, ts + 5);
+        else if (ts && !strncmp(ts, "join:", 5)) session_set(1, ts + 5);
+        if (st.session_link) st.env_link = 1;   // the test session stays up; the squad screens' answer ("no session") must not close it
+        return;
+    }
+    configure();
+    if (coop_link_open(peer && *peer ? peer : NULL, port && *port ? (unsigned)atoi(port) : 0)) {
+        st.active = 1; st.env_link = 1;
         rt_log("online co-op: pose link on, peer %s, local port %s, follow %d", peer && *peer ? peer : "-", port && *port ? port : "-", st.follow);
     }
+}
+
+void online_coop_session(int mode, const char *code) {
+    if (strcmp(rt_game_name, "2.0.0")) return;
+    if (!st.init) init();
+    session_set(mode, code ? code : "");
 }
 
 // The character nodes of the node array, in array order. Returns how many there are and puts the first two into nodes.

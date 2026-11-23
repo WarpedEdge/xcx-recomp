@@ -38,3 +38,17 @@ int coop_ctl_decode(const uint8_t *in, size_t n, CoopCtl *m) {
     *m = q;
     return 1;
 }
+
+int coop_session_ports(int joined, const char *code, unsigned *local_port, unsigned *peer_port) {
+    if (!code || !*code || strlen(code) > 5) return 0;
+    unsigned v = 0;
+    for (const char *c = code; *c; ++c) {
+        if (*c < '0' || *c > '9') return 0;
+        v = v * 10 + (unsigned)(*c - '0');
+    }
+    if (v < 1024 || v > 65533) return 0;
+    *local_port = v + (joined ? 2u : 1u);
+    *peer_port = v + (joined ? 1u : 2u);
+    return 1;
+}
+

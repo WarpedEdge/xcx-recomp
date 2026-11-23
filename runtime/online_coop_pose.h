@@ -44,3 +44,9 @@ typedef struct {
 void coop_ctl_encode(const CoopCtl *m, uint8_t out[COOP_CTL_BYTES]);
 // 1 when n is exactly COOP_CTL_BYTES, the magic matches, the kind is known and the position is finite and below 100000 in size; else 0.
 int coop_ctl_decode(const uint8_t *in, size_t n, CoopCtl *m);
+
+// The pose link of a squad session. In the first stage a squad's passcode is the loopback port P of its host (1024 to 65533); the host
+// listens on P + 1 and sends to P + 2, the joined player the other way round, both on 127.0.0.1. joined is 0 for the player who created
+// the squad and 1 for the one who joined. 1 and the two ports when the passcode is plain digits and in range; else 0.
+int coop_session_ports(int joined, const char *code, unsigned *local_port, unsigned *peer_port);
+

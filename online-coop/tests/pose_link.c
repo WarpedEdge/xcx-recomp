@@ -89,6 +89,16 @@ int main(void) {
     assert(wait_recv(buf, sizeof wire) == 0);       // longer than the buffer: dropped, not cut
     coop_link_close();
     assert(!coop_link_send(wire, sizeof wire));     // closed
+    // The pose link of a squad session: the passcode is the host's loopback port, the two sides use the next two ports in turn.
+    {
+        unsigned lp = 0, pp = 0;
+        assert(coop_session_ports(0, "27015", &lp, &pp) && lp == 27016 && pp == 27017);
+        assert(coop_session_ports(1, "27015", &lp, &pp) && lp == 27017 && pp == 27016);
+        assert(coop_session_ports(0, "1024", &lp, &pp) && lp == 1025 && coop_session_ports(1, "65533", &lp, &pp) && lp == 65535 && pp == 65534);
+        assert(!coop_session_ports(0, "1023", &lp, &pp) && !coop_session_ports(0, "65534", &lp, &pp) && !coop_session_ports(0, "", &lp, &pp));
+        assert(!coop_session_ports(0, NULL, &lp, &pp) && !coop_session_ports(0, "27 15", &lp, &pp) && !coop_session_ports(0, "123456", &lp, &pp));
+        assert(!coop_session_ports(1, "abcde", &lp, &pp) && !coop_session_ports(1, "-2701", &lp, &pp));
+    }
     puts("pose and link tests passed");
     return 0;
 }

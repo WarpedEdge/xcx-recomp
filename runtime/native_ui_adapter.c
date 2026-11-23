@@ -527,6 +527,17 @@ int rt_native_ui_hook(unsigned id, Cpu *c) {
     if (id == HOOK_COOP_TICK) {
         unsigned command = mod_native_ui_take_coop_command(); // from host.native_ui.coop_command; the numbers are the add-on's
         if (command) online_coop_command(command);
+        // The squad session decides whether the add-on's pose link is open. The report's mode is the details screen's: created or joined
+        // while the session is the one the player made; the in-squad mode (a second attempt while one is up) says nothing new.
+        static unsigned pass;
+        if ((++pass & 15u) == 1u) {
+            char code[16] = "";
+            if (!mod_native_ui_session_active()) online_coop_session(-1, "");
+            else {
+                int mode = mod_native_ui_details(code, sizeof code);
+                if (mode == MOD_NATIVE_MODE_CREATED || mode == MOD_NATIVE_MODE_JOINED) online_coop_session(mode, code);
+            }
+        }
     }
     if (id == HOOK_COOP_TICK || id == HOOK_COOP_NODE_COPY) return rt_online_coop_hook(id, c);
     if (!rt_native_ui_capable()) return 0;

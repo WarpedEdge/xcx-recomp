@@ -14,6 +14,7 @@ void fnprof_hit(uint64_t a,uint64_t b,uint64_t c){(void)a;(void)b;(void)c;}
 void rt_dispatch(Cpu *c){(void)c;abort();}
 int rt_online_coop_hook(unsigned id,Cpu *c){(void)id;(void)c;return 0;} // the co-op add-on has its own tests (online-coop/tests)
 static unsigned coop_seen;void online_coop_command(unsigned command){coop_seen=command;}
+static int session_mode=-9;static char session_code[16];void online_coop_session(int mode,const char *code){session_mode=mode;snprintf(session_code,sizeof session_code,"%s",code?code:"");}
 void rt_log(const char *s,...){(void)s;}
 static uint64_t fake_now=1000;uint64_t kern_now_ns(void){return fake_now;} // the toast hold is real time; the fixture moves it by hand
 #define TOAST_NS 4000000000ull
@@ -262,6 +263,8 @@ int main(void){
  {assert(!mod_native_ui_coop_command("beta",1)&&!mod_native_ui_coop_command("alpha",0)&&!mod_native_ui_coop_command("alpha",7)&&!mod_native_ui_take_coop_command());
   assert(mod_native_ui_coop_command("alpha",3)&&mod_native_ui_coop_command("alpha",5));
   assert(!hook(11,0,0,0,NULL)&&coop_seen==5);coop_seen=0;assert(!hook(11,0,0,0,NULL)&&coop_seen==0);}
+ // The tick asks the registry about the squad session every 16th pass; with none up it tells the add-on there is none.
+ {session_mode=-9;for(int i=0;i<16;++i)assert(!hook(11,0,0,0,NULL));assert(session_mode==-1&&!session_code[0]);}
  // The toast: the owner asks, the state hook (any state) takes the text once, writes it into the toast row, requests the game's
  // toast with id 0x241 on the message manager, and puts the row back later. One toast at a time; the latest text waits.
  {char t47[MESSAGE_TOAST_MAX+2];memset(t47,'x',sizeof t47);t47[sizeof t47-1]=0;char t46[MESSAGE_TOAST_MAX+1];memset(t46,'y',sizeof t46);t46[sizeof t46-1]=0;
