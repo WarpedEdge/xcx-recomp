@@ -82,7 +82,7 @@ static void select_fields(lua_State *L,int original,const char *const *names) {
 static int settings_register(lua_State *L);
 static int settings_get(lua_State *L);
 static int menu_register(lua_State *L);
-static int native_ui_register(lua_State *L);static int native_ui_report(lua_State *L);static int native_ui_toast(lua_State *L);static int native_ui_details_status(lua_State *L);static int native_ui_set_session(lua_State *L);
+static int native_ui_register(lua_State *L);static int native_ui_report(lua_State *L);static int native_ui_toast(lua_State *L);static int native_ui_coop_command(lua_State *L);static int native_ui_details_status(lua_State *L);static int native_ui_set_session(lua_State *L);
 static int provider_status(lua_State *L);
 static int provider_submit(lua_State *L);
 static int ui_status(lua_State *L);
@@ -109,7 +109,7 @@ static int setup(lua_State *L) {
     lua_newtable(L);lua_pushcfunction(L,provider_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,provider_submit);lua_setfield(L,-2,"submit");lua_setfield(L,-2,"provider");
     lua_newtable(L);lua_pushcfunction(L,ui_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,ui_enable);lua_setfield(L,-2,"enable");lua_setfield(L,-2,"ui");
     lua_newtable(L);lua_pushcfunction(L,menu_register);lua_setfield(L,-2,"register");lua_setfield(L,-2,"menu");
-    lua_newtable(L);lua_pushcfunction(L,native_ui_register);lua_setfield(L,-2,"register");lua_pushcfunction(L,native_ui_report);lua_setfield(L,-2,"report");lua_pushcfunction(L,native_ui_details_status);lua_setfield(L,-2,"details_status");lua_pushcfunction(L,native_ui_set_session);lua_setfield(L,-2,"set_session");lua_pushcfunction(L,native_ui_toast);lua_setfield(L,-2,"toast");lua_setfield(L,-2,"native_ui");
+    lua_newtable(L);lua_pushcfunction(L,native_ui_register);lua_setfield(L,-2,"register");lua_pushcfunction(L,native_ui_report);lua_setfield(L,-2,"report");lua_pushcfunction(L,native_ui_details_status);lua_setfield(L,-2,"details_status");lua_pushcfunction(L,native_ui_set_session);lua_setfield(L,-2,"set_session");lua_pushcfunction(L,native_ui_toast);lua_setfield(L,-2,"toast");lua_pushcfunction(L,native_ui_coop_command);lua_setfield(L,-2,"coop_command");lua_setfield(L,-2,"native_ui");
     lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushstring(L,owner(L)->package->id); lua_setfield(L,-2,"id"); lua_setglobal(L,"host");
     return 0;
 }
@@ -451,6 +451,19 @@ static int native_ui_report(lua_State *L){
   if(!mod_native_ui_text_valid(text))return luaL_error(L,"native_ui report text must be 1 to %d printable ASCII characters (a newline is allowed)",MOD_NATIVE_TEXT_MAX);
  }
  lua_pushboolean(L,mod_native_ui_report_message(m->package->id,status,text));return 1;
+}
+
+// host.native_ui.coop_command(name): a command for the online co-op add-on (on the game thread at the next pass): "go", "bring",
+// "force_go", "force_bring", "accept" or "decline". Any other name is a script error. Returns true when accepted, false for another
+// mod or no registration. It carries no position or address; the target is always the other player.
+static int native_ui_coop_command(lua_State *L){
+ static const char *const names[]={"go","bring","force_go","force_bring","accept","decline",NULL};
+ ModState *m=owner(L);
+ if(lua_type(L,1)!=LUA_TSTRING)return luaL_error(L,"native_ui coop_command takes a command name");
+ const char *name=lua_tostring(L,1);unsigned command=0;
+ for(unsigned i=0;names[i];++i)if(!strcmp(name,names[i]))command=i+1;
+ if(!command)return luaL_error(L,"native_ui coop_command: unknown command");
+ lua_pushboolean(L,mod_native_ui_coop_command(m->package->id,command));return 1;
 }
 
 // host.native_ui.set_session(active): tells the host whether the mod has a session up (true) or not (false). While one is up, Play in

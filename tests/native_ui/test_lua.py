@@ -153,6 +153,18 @@ class Registration(unittest.TestCase):
         for call in ('toast("Starting a squad...")', 'toast("[ST:col p1=red ]Oops")', 'toast("' + 'a' * 46 + '")'):
             out = self.run_mod('assert(' + REGISTER + ')', event='host.native_ui.' + call)
             self.assertNotIn('alpha error event', out, call)
+    def test_coop_command_names_and_owner(self):
+        # host.native_ui.coop_command(name): one of six names; any other name or type is a Lua error; another mod gets false.
+        for call in ('coop_command("")', 'coop_command("teleport")', 'coop_command(3)', 'coop_command()', 'coop_command("GO")'):
+            out = self.run_mod('assert(' + REGISTER + ')', event='host.native_ui.' + call)
+            self.assertIn('alpha error event', out, call)
+        for name in ('go', 'bring', 'force_go', 'force_bring', 'accept', 'decline'):
+            out = self.run_mod('assert(' + REGISTER + ')', event='assert(host.native_ui.coop_command("' + name + '")==true)')
+            self.assertNotIn(' error ', out, name)
+        out = self.run_mod('assert(' + REGISTER + ')', second='assert(host.native_ui.coop_command("go")==false)')    # another mod
+        self.assertNotIn(' error ', out)
+        out = self.run_mod('', event='assert(host.native_ui.coop_command("go")==false)')                            # no registration
+        self.assertNotIn(' error ', out)
     def test_cancellation_withdraws(self):
         out = self.run_mod('assert(' + REGISTER + ')', steps=('cancel', 'native=2'))
         self.assertNotIn('ran ', out)

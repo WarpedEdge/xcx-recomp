@@ -7,6 +7,8 @@
 #include "message_text.h"
 #include "mod_native_ui.h"
 #include "online_coop_adapter.h"
+_Static_assert(OC_CMD_GO == 1 && OC_CMD_BRING == 2 && OC_CMD_FORCE_GO == 3 && OC_CMD_FORCE_BRING == 4 && OC_CMD_ACCEPT == 5 &&
+               OC_CMD_DECLINE == MOD_COOP_COMMAND_MAX, "host.native_ui.coop_command names follow the add-on's command numbers");
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -522,6 +524,10 @@ static void online_caller_note(const char *query, uint64_t caller) {
 int rt_native_ui_hook(unsigned id, Cpu *c) {
     // The co-op hooks run every pass of the main loop and at every node copy, so they are told apart before the capability check,
     // which the add-on does once on its own.
+    if (id == HOOK_COOP_TICK) {
+        unsigned command = mod_native_ui_take_coop_command(); // from host.native_ui.coop_command; the numbers are the add-on's
+        if (command) online_coop_command(command);
+    }
     if (id == HOOK_COOP_TICK || id == HOOK_COOP_NODE_COPY) return rt_online_coop_hook(id, c);
     if (!rt_native_ui_capable()) return 0;
     if (id == HOOK_ONLINE_READY) {

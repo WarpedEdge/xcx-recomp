@@ -4,13 +4,13 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
-static atomic_flag guard=ATOMIC_FLAG_INIT;static int toast_waiting;
+static atomic_flag guard=ATOMIC_FLAG_INIT;static int toast_waiting;static atomic_uint coop_waiting;
 static ModNativeUi registered;static int supported;static uint64_t epoch=1;
 static atomic_uint published;static atomic_int session_up;static void (*wake)(void);
 static void lock(void){while(atomic_flag_test_and_set_explicit(&guard,memory_order_acquire)){};}
 static void unlock(void){atomic_flag_clear_explicit(&guard,memory_order_release);}
 void mod_native_ui_set_wake(void (*callback)(void)){lock();wake=callback;unlock();}
-void mod_native_ui_reset(void){lock();atomic_store(&session_up,0);toast_waiting=0;registered=(ModNativeUi){0};supported=0;atomic_store(&published,0);if(epoch!=UINT64_MAX)++epoch;unlock();}
+void mod_native_ui_reset(void){lock();atomic_store(&session_up,0);toast_waiting=0;atomic_store(&coop_waiting,0);registered=(ModNativeUi){0};supported=0;atomic_store(&published,0);if(epoch!=UINT64_MAX)++epoch;unlock();}
 void mod_native_ui_support(int yes){lock();supported=epoch==UINT64_MAX?-1:yes;if(supported<=0)atomic_store(&published,0);unlock();}
 const char *mod_native_ui_register(const ModNativeUi *r){
     const char *error=NULL;lock();
@@ -95,4 +95,11 @@ int mod_native_ui_take_toast(char *out,size_t cap){
 }
 unsigned mod_native_ui_result(void){return atomic_load(&answer);}
 void mod_native_ui_message(char *out,size_t cap){if(!cap)return;lock();snprintf(out,cap,"%s",reported);unlock();}
-void mod_native_ui_invalidate(void){lock();atomic_store(&session_up,0);toast_waiting=0;if(epoch!=UINT64_MAX)++epoch;if(epoch==UINT64_MAX)supported=-1;atomic_store(&published,0);unlock();}
+void mod_native_ui_invalidate(void){lock();atomic_store(&session_up,0);toast_waiting=0;atomic_store(&coop_waiting,0);if(epoch!=UINT64_MAX)++epoch;if(epoch==UINT64_MAX)supported=-1;atomic_store(&published,0);unlock();}
+int mod_native_ui_coop_command(const char *owner,unsigned command){
+    if(!owner||command<1||command>MOD_COOP_COMMAND_MAX)return 0;
+    lock();int ok=supported>0&&registered.epoch==epoch&&registered.owner[0]&&!strcmp(registered.owner,owner);
+    if(ok)atomic_store(&coop_waiting,command);
+    unlock();return ok;
+}
+unsigned mod_native_ui_take_coop_command(void){return atomic_exchange(&coop_waiting,0);}

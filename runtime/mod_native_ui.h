@@ -63,3 +63,10 @@ int mod_native_ui_toast(const char *owner, const char *text);
 int mod_native_ui_take_toast(char *out, size_t cap);
 // Called after a native intent is queued so the mod worker runs it without waiting for its idle poll; NULL clears.
 void mod_native_ui_set_wake(void (*callback)(void));
+// A command for the online co-op add-on, from the registered owner (any registration). The numbers are the add-on's commands
+// (online_coop_adapter.h): 1 go, 2 bring, 3 force_go, 4 force_bring, 5 accept, 6 decline. One slot: a later command replaces one
+// the game thread has not taken yet. 1 when accepted; 0 for another mod, no registration or a number outside 1 to 6.
+enum { MOD_COOP_COMMAND_MAX = 6 };
+int mod_native_ui_coop_command(const char *owner, unsigned command);
+// The game thread takes the waiting command once; 0 when none.
+unsigned mod_native_ui_take_coop_command(void);
