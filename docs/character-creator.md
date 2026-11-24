@@ -330,3 +330,20 @@ The hair tab's category list (Style, Special, Roots & Tips Color, Roots Color, T
 ### Recording the hand-made fits
 
 Every time a Modify window closes, or the cursor leaves a hairstyle whose values changed, one line is appended to `<profile>/hair-modify-record.txt`: the hairstyle's row, the wearer's gender, the page, and the total of every part that is not at its start (scale as a factor, shifts in cm, tilt in degrees), or `default`. A later line of a hairstyle replaces an earlier one. The fits found this way are meant to become the starting point of each hairstyle: `runtime/avatar_hair_fits.inc` holds a table (`mod_baked`, key = row * 2 + 1 for a female wearer, else row * 2; scale change, metres, degrees per part). The window loads the entry of the hairstyle under the cursor into `mod_b` and shows it as scale 1.0 and no shift or tilt; the player's changes are added to it (`mvc` in `runtime/avatar_hair.c`), and Y or X sets a row back to that start. The table is empty until the fits of a creator pass are copied into it, with the values documented here. Limits: the start values apply where the hairstyle is the one under the cursor in the creator; a worn hairstyle seen anywhere else has only the fit of its gender (the model carries no row to look the table up by).
+
+### Fit by candidates (female hair on a male head)
+
+After the Modify window and its start values existed, every hair of the lists was photographed on the first male preset and the first female preset (three views each: `XCX_HAIR_REVIEW=<name>` with `XCX_HAIR_REVIEW_PAGES=3 XCX_HAIR_ANGLES=2 XCX_HAIR_UNTURN=1`, run through `build/inst/tools/shotr.sh`; the right stick turns the model one step between shots and `XCX_HAIR_UNTURN=1` turns it back, though the view drifts a little over a long run). What the pictures show:
+
+- Hairs of the wearer's own gender (male rows 1 to 56 and the bonus rows on a male head, female rows on a female head) fit. The buzz cuts (rows 34, 47, 55) have the game's own sparkle, and the shaved styles have bare scalp by design.
+- Male hair on a female head fits, except for the rows that only lack stubble shading (known, see "Fit of other-gender hair").
+- Female hair on a male head had a hairline that sat too far back: the scalp cap is cut for a smaller, lower forehead, so the forehead and crown showed bare skin (worst on the ponytails and updos: rows 98, 101, 109, 112, 86, 87, 94, 96, 103, 105; milder on the curls 59 and 66 and the parted styles 78, 71, 73, 95, 99, 104, 111). The story hair of row 132 had the same fault.
+
+To pick the values, `XCX_HAIR_MODSETS="g,scale,x,y,z,tilt+g,...;..."` makes the review photograph each hair once per candidate (g is the part, 0 whole hair, 1 scalp cap; scale as a change, shifts in metres, tilt in degrees; the candidates are the start values of that hair), `XCX_HAIR_ROWS="98,101,..."` limits the run to some rows, and `XCX_HAIR_TURN=n` with `XCX_HAIR_UNTURN=1` takes the shots from n steps round and turns back. Candidates tried on the scalp cap: forward 1.5 cm (covers most of the bare forehead, a moving the cap back makes it worse), up 1.5 cm (no use), scale +0.12 (covers it), scale +0.12 with 1.5 cm forward (best), scale +0.18 or +0.25 (the cap bulges), the whole hair 2 cm forward (covers the forehead but pushes the ponytail with it). Two sets were kept, in `runtime/avatar_hair_fits.inc`:
+
+| Start values of the scalp cap | Rows (male wearer) |
+|---|---|
+| scale +0.12, 1.5 cm forward | 59, 66, 78, 86, 87, 94, 96, 98, 101, 103, 105, 109, 112, and the story hair 132 |
+| scale +0.08, 1 cm forward | 71, 73, 95, 99, 104, 111 |
+
+The other female hairs looked right as they were and have no entry; the stronger set puffed them up (a pompadour on 99, 100, 106 to 108, 110). Checked on the first male preset in front and side views, and on faces 1, 3 and 6 for the worst rows. The values are start values: the Modify window shows them as scale 1.0 and no shift, and a hair of the creator that is worn on the field has only the gender-level fit, because the field's model carries no row to look the table up by.
