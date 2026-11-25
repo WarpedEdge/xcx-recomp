@@ -225,6 +225,15 @@ static int guest_string(uint64_t p, char *out, size_t cap) {
 }
 
 uint64_t romfs_mod_declines(uint64_t list, uint64_t path) {
+    // XCX_ROMFS_PATHS=1 logs every path the archive looks up (research aid for finding what a model loads).
+    static int log_paths = -1;
+    if (log_paths < 0) log_paths = getenv("XCX_ROMFS_PATHS") != NULL;
+    if (log_paths) {
+        char seen[1024];
+        static unsigned seen_logs;
+        if (guest_string(path, seen, sizeof seen) && __atomic_fetch_add(&seen_logs, 1, __ATOMIC_RELAXED) < 6000)
+            rt_log("romfs path: %s", seen);
+    }
     maybe_reload();
     if (!__atomic_load_n(&nfiles, __ATOMIC_RELAXED)) return list;
     // One entry, then the empty string that ends the list. Thread-local: the archive walks it right away on this thread.

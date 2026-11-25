@@ -32,6 +32,7 @@
 #include "vk_exec.h"
 #include "platform/platform.h"
 #include "sha256.h"
+#include "avatar_hair.h"
 
 typedef struct {
     uint64_t addr;
@@ -51,6 +52,8 @@ typedef struct Tex {
     int uploaded, released;
     uint32_t n_up;                // uploads of this entry (vk_texture_debug)
     int last_ch;                  // last vk_mem_changed result of make_fresh: 1 written, 0 clean, -1 not tracked
+    uint8_t ov_sheet;             // an icon sheet avatar_icon_patch paints on at every upload (runtime/avatar_hair.c)
+    uint32_t ov_gen;              // the overlay generation of its last upload
     struct Tex *next_at;          // other entries at the same storage address
     uint8_t gpu_dirty;            // mirrored, and the GPU wrote the image after the last write-back to the storage
     uint32_t gpu_gen;             // page generation when the GPU write that set gpu_dirty was recorded
@@ -692,6 +695,8 @@ static void upload(Tex *e) {
                 rg[k].bufferRowLength = w, rg[k].bufferImageHeight = h;
             } else {
                 rg[k].bufferRowLength = rb / (uint32_t)bpb * (uint32_t)bw, rg[k].bufferImageHeight = rows * (uint32_t)bh;
+                uint32_t ov = avatar_icon_patch(d->width, d->height, bpb, bw, lv, dst, rb, rows);
+                if (ov) e->ov_sheet = 1, e->ov_gen = ov - 1;
             }
             free(tmp);
         }
@@ -764,6 +769,7 @@ static void make_fresh(Tex *e) {
     int ch = vk_mem_changed(e->pub.addr, size, e->wgen, &now);
     e->wgen = now;
     e->last_ch = ch;
+    if (!ch && e->ov_sheet && e->ov_gen != avatar_icon_gen()) ch = 1;
     if (ch) upload(e);   // 1 written, -1 not tracked: both upload again
 }
 
@@ -778,6 +784,7 @@ static void make_fresh_snap(Tex *e) {
     e->wgen = now;
     if (!e->uploaded) { upload(e); return; }
     e->last_ch = ch;
+    if (!ch && e->ov_sheet && e->ov_gen != avatar_icon_gen()) ch = 1;
     if (ch) upload(e);
 }
 

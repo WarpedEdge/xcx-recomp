@@ -10,6 +10,7 @@
 // SavageWindRecomp's runtime/ui/menu.mm (https://github.com/Revivedx/SavageWindRecomp @
 // 575ad88e02f9a89a9a885d90039d48af33c982f4, MIT, Copyright (c) 2026 Revivedx and the Savage Wind Recomp contributors,
 // Copyright (c) 2026 Peiikai); the pages are rows of option_rows.cpp.
+#include <algorithm>
 #include <atomic>
 #include <math.h>
 #include <stdio.h>
@@ -1644,6 +1645,383 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
     ImGui::End();
 }
 
+// The creator's hair pages hint (runtime/avatar_hair.c): the page button (the top face button: Triangle on a PlayStation pad, Space on the
+// keyboard) turns the pages of the style grid. Drawn at the bottom left of the game picture while the Style grid is open, with the glyph the
+// glyph system picks for the controller and style in use (a tile of the glyph art pack, or a plain round button for the native style).
+extern "C" int avatar_hair_hint(int *page, int *male, int *source, int *family, int *symbol);
+extern "C" int avatar_hair_hud(char *buf, int n);
+extern "C" int avatar_hair_modify_ui(char lines[48][72], int *open, int *sel);
+extern "C" const char *avatar_hair_shot_tag(void);
+extern "C" int avatar_hair_listbar(float *pos, float *len);
+extern "C" int avatar_hair_dialog(void);
+
+// The glyph of a creator button symbol, size x size, centred on (cx, cy): the art tile of the glyph art pack fitted to a 64 x 64 cell and drawn as
+// runs of rectangles (the overlay has no textures), or for the native style a round button with its label. The cells are kept, a panel draws several.
+static const char *sym_label(int s) {
+    switch (s) {
+        case SYM_X: return "X";  case SYM_Y: return "Y";  case SYM_A: return "A";  case SYM_B: return "B";
+        case SYM_L: return "L";  case SYM_R: return "R";  case SYM_ZL: return "ZL"; case SYM_ZR: return "ZR";
+        case SYM_MNS: return "-"; case SYM_CRSUD: return "U/D"; case SYM_CRSLR: return "L/R";
+        default: return "?";
+    }
+}
+
+// A glyph tile fitted to a box up to three times as wide as it is high, cropped to its visible pixels. A tile that is much taller than wide (two keys one
+// above the other, the keyboard's up and down) is cut in the middle and set side by side, left to right. Resampled to the size it is drawn at, in whole
+// pixels, so every texel is drawn as one screen pixel at a whole position: fitting a fixed 64 x 64 cell and stretching its texels by a fraction left
+// uneven edges and seams, which looked grainy.
+struct GlyphTile { int a, n, w, h; uint32_t px[128 * 64]; };
+static int16_t g_art[GLYPH_SYMBOLS];   // the glyph system's tiles for the controller and style in use, refreshed once per drawn frame
+static bool g_kbd;                      // the keyboard style is the one in use
+// Refreshes g_art for the panels at the bottom left. On the keyboard a button bound to two keys (fine and coarse: Z or the right mouse button, F or X) has no tile in
+// the glyph system, which then falls back to the game's own round button; here the first of its keys that is not a mouse button stands for it.
+static void glyph_refresh() {
+    glyph_current_symbol_set(g_art);
+    int source, family, layout, pref = glyph_style_setting();
+    static InputMap map;
+    input_glyph_snapshot(&source, &family, &layout, &map);
+    g_kbd = pref == GLYPH_KEYBOARD || (pref == GLYPH_AUTO && source == GLYPH_SOURCE_KEYBOARD);
+    if (!g_kbd) return;
+    static const struct { int symbol, action; } two[] = {{SYM_ZL, B_ZL}, {SYM_ZR, B_ZR}};
+    for (const auto &z : two) {
+        if (g_art[z.symbol] >= 0) continue;
+        uint8_t keys[INPUT_BINDING_MAX];
+        int n = input_map_keys_of(&map, z.action, keys, sizeof keys);
+        for (int i = 0; i < n; i++) {
+            if (keys[i] == KEY_NONE || (keys[i] >= KEY_MOUSE_L && keys[i] <= KEY_MOUSE_X2)) continue;
+            int a = glyph_art_find(GLYPH_KEYBOARD, keys[i]);
+            if (a < 0) continue;
+            g_art[z.symbol] = (int16_t)glyph_art_variant(a, glyph_appearance_setting());
+            break;
+        }
+    }
+}
+static const GlyphTile *glyph_tile(int a, int N) {
+    enum { SLOTS = 48 };
+    static GlyphTile cache[SLOTS];
+    static uint32_t tmp[128 * 128];
+    static int used;
+    for (int k = 0; k < used; k++) if (cache[k].a == a && cache[k].n == N) return &cache[k];
+    if (used >= SLOTS) used = 0;
+    auto bounds = [&](int cw, int ch, int b[4]) {
+        b[0] = cw; b[1] = ch; b[2] = b[3] = -1;
+        for (int y = 0; y < ch; y++) for (int x = 0; x < cw; x++)
+            if (tmp[y * cw + x] >> 24) { b[0] = std::min(b[0], x); b[1] = std::min(b[1], y); b[2] = std::max(b[2], x); b[3] = std::max(b[3], y); }
+    };
+    int CW = std::min(128, N * 3), CH = N, b[4];
+    if (!glyph_art_cell((unsigned)a, CW, CH, 0, 0, CW, CH, tmp)) return nullptr;
+    bounds(CW, CH, b);
+    if (b[2] < b[0]) return nullptr;
+    int bw = b[2] - b[0] + 1, bh = b[3] - b[1] + 1;
+    GlyphTile &g = cache[used];
+    g.a = a; g.n = N;
+    if (bh * 10 > bw * 17) {   // two keys stacked: refit twice as high, then the upper half goes left and the lower half right
+        CW = N; CH = N * 2;
+        if (!glyph_art_cell((unsigned)a, CW, CH, 0, 0, CW, CH, tmp)) return nullptr;
+        bounds(CW, CH, b);
+        if (b[2] < b[0]) return nullptr;
+        bw = b[2] - b[0] + 1; bh = b[3] - b[1] + 1;
+        int top = bh / 2, bot = bh - top, gap = std::max(2, N / 10);
+        // each half cropped to its own visible rows, then the two centred on each other (the keys are not the same height)
+        auto rows = [&](int y0, int n, int *first, int *last) {
+            *first = n; *last = -1;
+            for (int y = 0; y < n; y++) for (int x = 0; x < bw; x++) if (tmp[(y0 + y) * CW + b[0] + x] >> 24) { *first = std::min(*first, y); *last = std::max(*last, y); }
+        };
+        int t0, t1, u0, u1;
+        rows(b[1], top, &t0, &t1);
+        rows(b[1] + top, bot, &u0, &u1);
+        if (t1 < t0 || u1 < u0) return nullptr;
+        int th = t1 - t0 + 1, uh = u1 - u0 + 1;
+        g.w = bw * 2 + gap; g.h = std::max(th, uh);
+        if (g.w > 128 || g.h > 64) return nullptr;
+        memset(g.px, 0, sizeof g.px);
+        for (int y = 0; y < th; y++) for (int x = 0; x < bw; x++) g.px[((g.h - th) / 2 + y) * g.w + x] = tmp[(b[1] + t0 + y) * CW + b[0] + x];
+        for (int y = 0; y < uh; y++) for (int x = 0; x < bw; x++) g.px[((g.h - uh) / 2 + y) * g.w + bw + gap + x] = tmp[(b[1] + top + u0 + y) * CW + b[0] + x];
+    } else {
+        g.w = bw; g.h = bh;
+        if (g.w > 128 || g.h > 64) return nullptr;
+        for (int y = 0; y < bh; y++) for (int x = 0; x < bw; x++) g.px[y * bw + x] = tmp[(b[1] + y) * CW + b[0] + x];
+    }
+    used++;
+    return &g;
+}
+
+// The glyph of a creator button symbol with its left edge at x, centred on cy, size pixels high (a wide tile is wider): returns the width it takes (dl null:
+// only measures). The art tile of the glyph art pack is drawn as runs of rectangles (the overlay has no textures); the native style gets a round button
+// with its label.
+static float glyph_at(ImDrawList *dl, int symbol, float x, float cy, float size) {
+    if (g_kbd && (symbol == SYM_CRSUD || symbol == SYM_CRSLR)) {   // two single keys side by side (clearer than the pack's stacked tile)
+        int s1 = symbol == SYM_CRSUD ? SYM_CRSU : SYM_CRSL, s2 = symbol == SYM_CRSUD ? SYM_CRSD : SYM_CRSR;
+        if (g_art[s1] >= 0 && g_art[s2] >= 0) {
+            float gap = std::max(2.f, size * 0.1f), w1 = glyph_at(dl, s1, x, cy, size);
+            return w1 + gap + glyph_at(dl, s2, x + w1 + gap, cy, size);
+        }
+    }
+    int a = symbol >= 0 && symbol < GLYPH_SYMBOLS ? g_art[symbol] : -1;
+    int N = std::max(8, std::min((int)(size + 0.5f), 64));
+    const GlyphTile *g = a >= 0 ? glyph_tile(a, N) : nullptr;
+    if (g) {
+        if (dl) {
+            float x0 = std::floor(x + 0.5f), y0 = std::floor(cy - g->h / 2.f + 0.5f);
+            for (int y = 0; y < g->h; y++)
+                for (int px = 0; px < g->w;) {
+                    uint32_t p = g->px[y * g->w + px];
+                    int x1 = px + 1;
+                    if (!(p >> 24)) { px = x1; continue; }
+                    while (x1 < g->w && g->px[y * g->w + x1] == p) x1++;
+                    dl->AddRectFilled(ImVec2(x0 + (float)px, y0 + (float)y), ImVec2(x0 + (float)x1, y0 + (float)(y + 1)), IM_COL32(p & 255, p >> 8 & 255, p >> 16 & 255, p >> 24));
+                    px = x1;
+                }
+        }
+        return (float)g->w;
+    }
+    if (dl) {
+        float cx = x + size / 2, r = size * 0.5f - 0.5f;
+        dl->AddCircleFilled(ImVec2(cx, cy), r, IM_COL32(245, 250, 252, 255), 28);
+        dl->AddCircle(ImVec2(cx, cy), r, IM_COL32(110, 120, 130, 255), 28, std::max(1.f, r * 0.1f));
+        const char *lab = sym_label(symbol);
+        ImVec2 ls = ImGui::CalcTextSize(lab);
+        float f = std::min(r * 1.2f / ls.y, r * 1.5f / ls.x);
+        dl->AddText(nullptr, ImGui::GetFontSize() * f, ImVec2(cx - ls.x * f / 2, cy - ls.y * f / 2), IM_COL32(30, 42, 56, 255), lab);
+    }
+    return size;
+}
+
+static void hint_glyph(ImDrawList *dl, int symbol, float cx, float cy, float size) {   // centred on cx
+    float w = glyph_at(nullptr, symbol, 0, cy, size);
+    glyph_at(dl, symbol, cx - w / 2, cy, size);
+}
+
+static void hud_draw(const MenuTarget *t, float scale) {   // XCX_HAIR_HUD=1: what the hairstyle fit did to the hairstyle under the cursor
+    char buf[320];
+    if (!avatar_hair_hud(buf, sizeof buf)) return;
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    ImVec2 sz = ImGui::CalcTextSize(buf);
+    float pad = 6 * scale;
+    ImVec2 p(12 * scale, (float)t->height - 40 * scale - sz.y - pad * 2);
+    dl->AddRectFilled(p, ImVec2(p.x + sz.x + pad * 2, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 170), 4 * scale);
+    dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 235, 120, 255), buf);
+}
+
+// The Modify window (runtime/avatar_hair.c): the creator's category list has a Modify row, and while the cursor is on it this window takes the place of the
+// grid the other rows show there. It lists every part of the hair with its values, the selected row marked, and the buttons that work in it as the glyphs
+// of the controller in use. A line starting with '#' names a part; a line starting with '@' is a line of buttons: "sym[+sym]=label;..." (symbols as
+// numbers); a value starting with '@' is one button.
+// dl null: only measures (the returned x is where the line ends). colw > 0: the entries start at fixed distances of colw from x (columns), and *over is raised to the
+// largest share of its column an entry takes (above 1: it does not fit).
+static float glyph_line(ImDrawList *dl, const char *spec, float x, float y, float rh, float f, float gap, float colw = 0.f, float *over = nullptr) {
+    float g = rh * 0.92f, gp = std::max(2.f, g * 0.1f), x0 = x;
+    float k = f / ImGui::GetFontSize();
+    int col = 0;
+    for (const char *p = spec; *p; col++) {
+        if (colw > 0.f) x = x0 + colw * (float)col;
+        float xs = x;
+        int a = atoi(p), b = -1;
+        while (*p && *p != '+' && *p != '=' && *p != ';') p++;
+        if (*p == '+') { b = atoi(p + 1); while (*p && *p != '=' && *p != ';') p++; }
+        char label[24] = {0};
+        if (*p == '=') { p++; int n = 0; while (*p && *p != ';' && n < 23) label[n++] = *p++; }
+        if (*p == ';') p++;
+        x += glyph_at(dl, a, x, y + rh / 2, g) + gp;
+        if (b >= 0) x += glyph_at(dl, b, x, y + rh / 2, g) + gp;
+        if (dl) dl->AddText(nullptr, f, ImVec2(x + 3, y + (rh - f) / 2), IM_COL32(190, 230, 242, 255), label);
+        x += 3 + ImGui::CalcTextSize(label).x * k;
+        if (colw > 0.f && over) *over = std::max(*over, (x - xs) / colw);
+        x += gap;
+    }
+    return x;
+}
+
+static bool modify_draw(const MenuTarget *t) {
+    char lines[48][72];
+    int open = 0, sel = -1;
+    int n = avatar_hair_modify_ui(lines, &open, &sel);
+    if (n <= 0) return false;
+    // the creator's picture fills the window: the grid of the other rows is at 0.339 to 0.5215 of its width and 0.204 to 0.844 of its height
+    float W = (float)t->width, H = (float)t->height;
+    float fs = std::min(H / 1080.f, W / 1920.f) * 22.f, rh = fs * 1.3f, pad = fs * 0.5f, hb_pad = pad;
+    float x0 = W * 0.339f, w = W * 0.1825f, y0 = H * 0.2044f, h = H * 0.64f;
+    int nb = 0;
+    int body[48];
+    for (int i = 0; i < n; i++) if (lines[i][0] != '@') body[nb++] = i;   // the lines of buttons are drawn by legend_draw, outside the window
+    int fit = std::max(1, (int)((h - pad * 2 - hb_pad) / rh));
+    static int first;
+    int selb = -1;
+    for (int j = 0; j < nb; j++) if (body[j] == sel) selb = j;
+    if (selb >= 0) {   // keep the selected row in view (and the part's name above the first row)
+        if (selb < first) first = selb;
+        if (selb >= first + fit) first = selb - fit + 1;
+        if (selb > 0 && lines[body[selb - 1]][0] == '#' && first > selb - 1) first = selb - 1;
+    } else if (!open) first = 0;
+    first = std::max(0, std::min(first, std::max(0, nb - fit)));
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float hb = std::max(3.f, h * 0.0095f), x1 = x0 + w, y1 = y0 + h;
+    // The game's "Discard current edits" question is a panel of the game's own picture: it covers part of this window, as it covers the grid of the other rows. The window is
+    // painted in the three pieces that stay clear of its rectangle (measured on the grid's rectangle: it starts 0.197 of the grid's width in and 0.262 of its height down,
+    // ends 1.56 widths in and 0.661 heights down).
+    ImVec2 dlg0(x0 + w * 0.197f - 2.f, y0 + h * 0.262f - 2.f), dlg1(x0 + w * 1.56f + 2.f, y0 + h * 0.661f + 2.f);
+    int pieces = avatar_hair_dialog() ? 3 : 1;
+    for (int piece = 0; piece < pieces; piece++) {
+        if (pieces == 3) {
+            if (piece == 0) dl->PushClipRect(ImVec2(0, 0), ImVec2(dlg0.x, H), true);
+            else if (piece == 1) dl->PushClipRect(ImVec2(dlg0.x, 0), ImVec2(W, dlg0.y), true);
+            else dl->PushClipRect(ImVec2(dlg0.x, dlg1.y), ImVec2(W, H), true);
+        }
+        // the look of the game's own panels (colours read from its grid panel): an even dark body, a slate header band with a raised notch at the left and two small squares
+        // at the right, a thin band at the bottom
+        const ImU32 body_c = IM_COL32(16, 20, 30, 252);
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), body_c);
+        dl->AddRectFilledMultiColor(ImVec2(x0, y0 + hb), ImVec2(x1, y0 + hb * 4.f), IM_COL32(34, 46, 58, 252), IM_COL32(34, 46, 58, 252), body_c, body_c);
+        dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(32, 42, 54, 255), 0.f, 0, 1.5f);
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y0 + hb), IM_COL32(78, 96, 117, 255));
+        dl->AddRectFilled(ImVec2(x0, y0 - hb * 0.7f), ImVec2(x0 + w * 0.34f, y0 + hb), IM_COL32(72, 87, 107, 255));
+        dl->AddRectFilled(ImVec2(x1 - w * 0.12f, y0 + hb * 0.22f), ImVec2(x1 - w * 0.12f + hb * 0.55f, y0 + hb * 0.77f), IM_COL32(108, 137, 156, 255));
+        dl->AddRectFilled(ImVec2(x1 - w * 0.07f, y0 + hb * 0.22f), ImVec2(x1 - w * 0.07f + hb * 0.55f, y0 + hb * 0.77f), IM_COL32(108, 137, 156, 255));
+        dl->AddRectFilled(ImVec2(x0, y1 - hb * 0.5f), ImVec2(x1, y1), IM_COL32(79, 94, 114, 255));
+        float y = y0 + hb + pad * 0.6f;
+        for (int j = first; j < nb && j < first + fit; j++) {
+            int i = body[j];
+            if (lines[i][0] == '#') {
+                dl->AddText(nullptr, fs, ImVec2(x0 + pad, y + (rh - fs) / 2), IM_COL32(150, 215, 232, 255), lines[i] + 1);
+                dl->AddLine(ImVec2(x0 + pad, y + rh - 1), ImVec2(x0 + w - pad, y + rh - 1), IM_COL32(120, 215, 235, 110), 1.f);
+                y += rh;
+                continue;
+            }
+            if (i == sel) {
+                dl->AddRectFilled(ImVec2(x0 + pad * 0.4f, y), ImVec2(x0 + w - pad * 0.4f, y + rh), IM_COL32(25, 70, 78, 255));
+                dl->AddRect(ImVec2(x0 + pad * 0.4f, y), ImVec2(x0 + w - pad * 0.4f, y + rh), IM_COL32(44, 246, 246, 255), 0.f, 0, std::max(1.5f, fs * 0.09f));
+            }
+            // "label\tvalue\tposition": the name, the value and where it lies on its slider (0 to 1)
+            char buf[72];
+            snprintf(buf, sizeof buf, "%s", lines[i]);
+            char *tab = strchr(buf, '\t');
+            const char *val = "";
+            float frac = -1.f;
+            if (tab) {
+                *tab = 0; val = tab + 1;
+                char *t2 = strchr(tab + 1, '\t');
+                if (t2) { *t2 = 0; frac = (float)atof(t2 + 1); }
+            }
+            bool on = i == sel;
+            dl->AddText(nullptr, fs, ImVec2(x0 + pad * 1.4f, y + (rh - fs) / 2), on ? IM_COL32(245, 250, 252, 255) : IM_COL32(205, 215, 222, 255), buf);
+            float k = fs / ImGui::GetFontSize();
+            float vw = *val ? ImGui::CalcTextSize(val).x * k : 0.f;
+            if (*val) dl->AddText(nullptr, fs, ImVec2(x0 + w - pad * 1.6f - vw, y + (rh - fs) / 2), on ? IM_COL32(255, 255, 255, 255) : IM_COL32(215, 222, 228, 255), val);
+            if (frac >= 0.f) {   // the slider: a thin track, the part up to the thumb lit, a thumb that glows while the row is selected (like the creator's own sliders)
+                float sx0 = x0 + w * 0.40f, sx1 = x0 + w - pad * 1.6f - std::max(vw, w * 0.17f) - pad * 0.8f, cy = y + rh / 2;
+                float th = std::max(1.5f, rh * 0.07f), tx = sx0 + (sx1 - sx0) * std::max(0.f, std::min(1.f, frac));
+                dl->AddRectFilled(ImVec2(sx0, cy - th / 2), ImVec2(sx1, cy + th / 2), IM_COL32(58, 64, 72, 255));
+                dl->AddRectFilled(ImVec2(sx0, cy - th / 2), ImVec2(tx, cy + th / 2), on ? IM_COL32(32, 205, 205, 255) : IM_COL32(26, 120, 124, 255));
+                float cx = sx0 + (sx1 - sx0) * 0.5f;
+                dl->AddRectFilled(ImVec2(cx - 0.5f, cy - rh * 0.14f), ImVec2(cx + 0.5f, cy + rh * 0.14f), IM_COL32(95, 105, 115, 255));
+                float tw = std::max(3.f, rh * 0.13f), tt = rh * 0.30f;
+                if (on) {
+                    dl->AddRectFilled(ImVec2(tx - tw * 2.2f, cy - tt * 1.15f), ImVec2(tx + tw * 2.2f, cy + tt * 1.15f), IM_COL32(44, 246, 246, 60), tw);
+                    dl->AddRectFilled(ImVec2(tx - tw * 1.4f, cy - tt * 1.05f), ImVec2(tx + tw * 1.4f, cy + tt * 1.05f), IM_COL32(44, 246, 246, 90), tw * 0.7f);
+                }
+                dl->AddRectFilled(ImVec2(tx - tw / 2, cy - tt), ImVec2(tx + tw / 2, cy + tt), on ? IM_COL32(255, 255, 255, 255) : IM_COL32(190, 200, 208, 255));
+            }
+            y += rh;
+        }
+        if (nb > fit) {   // a scroll bar, like the grid's
+            float bx = x0 + w - pad * 0.45f, top = y0 + pad, hh = fit * rh;
+            dl->AddRectFilled(ImVec2(bx, top), ImVec2(bx + 3, top + hh), IM_COL32(28, 37, 44, 255));
+            dl->AddRectFilled(ImVec2(bx, top + hh * (float)first / (float)nb), ImVec2(bx + 3, top + hh * (float)(first + fit) / (float)nb), IM_COL32(79, 94, 114, 255));
+        }
+        if (pieces == 3) dl->PopClipRect();
+    }
+    return open != 0;
+}
+
+// The category list's scroll bar, placed against the grid's rectangle like the window (the list panel ends just left of it): the track and thumb colours of the grid's own bar.
+static void listbar_draw(const MenuTarget *t) {
+    float pos, len;
+    if (!avatar_hair_listbar(&pos, &len)) return;
+    float W = (float)t->width, H = (float)t->height;
+    float gx = W * 0.339f, gw = W * 0.1825f, gy = H * 0.2044f, gh = H * 0.64f;
+    float bw = std::max(3.f, gw * 0.013f), bx = gx - gw * 0.058f - bw, top = gy + gh * 0.03f, hh = gh * 0.79f;   // thin, and wholly inside the list panel (its right edge is at gx - 0.040 gw)
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(ImVec2(bx, top), ImVec2(bx + bw, top + hh), IM_COL32(40, 52, 62, 255), bw * 0.4f);
+    dl->AddRectFilled(ImVec2(bx, top + hh * pos), ImVec2(bx + bw, top + hh * (pos + len)), IM_COL32(120, 146, 166, 255), bw * 0.4f);
+}
+
+// The buttons that work in the Modify window, as lines of glyphs and labels in a panel at the bottom left of the picture (where the page hint sits while the
+// Style grid is open): the window itself is too narrow for glyphs of a readable size.
+static void legend_draw(const MenuTarget *t, bool f1) {
+    char lines[48][72];
+    int open = 0, sel = -1;
+    int n = avatar_hair_modify_ui(lines, &open, &sel);
+    if (f1 && !open) return;   // with the F1 menu open the buttons stay only while the editing window is open
+    int idx[8], nf = 0;
+    for (int i = 0; i < n && nf < 8; i++) if (lines[i][0] == '@') idx[nf++] = i;
+    if (!nf) return;
+    float gh = t->image_h > 0 ? (float)t->image_h : 9.f, gw = t->image_w > 0 ? (float)t->image_w : 16.f;
+    float ph = gh * std::min((float)t->width / gw, (float)t->height / gh);
+    // The same size for every controller and style: three fixed columns, the panel no wider than the category list's panel above it (its right edge is at 0.327 of
+    // the picture's width). Only an entry that does not fit its column makes everything smaller.
+    float f = ImGui::GetFontSize() * ph / 1080.f * 1.05f, lr, pad, gap, w, h, colw;
+    const float pw = (float)t->width * 0.275f;
+    for (int pass = 0; pass < 3; pass++) {
+        lr = f * 1.9f; pad = f * 0.5f; gap = f * 0.9f;
+        colw = (pw - pad * 2) / 3.f;
+        float over = 0.f;
+        for (int k = 0; k < nf; k++) glyph_line(nullptr, lines[idx[k]] + 1, 0, 0, lr, f, 0.f, colw, &over);
+        if (over <= 1.f) break;
+        f /= over * 1.02f;
+    }
+    w = pw; h = lr * (float)nf + pad * 2;
+    ImVec2 p0((float)t->width * 0.012f, (float)t->height * 0.985f - h), p1(p0.x + w, p0.y + h);
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(p0, p1, IM_COL32(6, 14, 22, 215), pad * 0.7f);
+    dl->AddRect(p0, p1, IM_COL32(120, 215, 235, 220), pad * 0.7f, 0, std::max(1.f, pad * 0.12f));
+    for (int k = 0; k < nf; k++) glyph_line(dl, lines[idx[k]] + 1, p0.x + pad, p0.y + pad + lr * (float)k, lr, f, 0.f, colw, nullptr);
+}
+
+static void corner_draw(const MenuTarget *t, bool f1);
+static void hint_draw(const MenuTarget *t, float scale) {
+    hud_draw(t, scale);
+    modify_draw(t);
+    listbar_draw(t);
+    corner_draw(t, false);
+}
+
+// The panels at the bottom left of the picture: the Modify window's buttons (legend), or the page hint of the Style grid. The page hint stays while the F1 menu is open (the Modify window does not, so neither does its legend).
+static void corner_draw(const MenuTarget *t, bool f1) {
+    glyph_refresh();
+    legend_draw(t, f1);
+    int page, male, source, family, symbol;
+    if (!avatar_hair_hint(&page, &male, &source, &family, &symbol)) return;
+    static int logged_page = -1, logged_source = -1, logged_symbol = -1;
+    if (logged_page != page || logged_source != source || logged_symbol != symbol) {
+        logged_page = page; logged_source = source; logged_symbol = symbol;
+        int16_t art[GLYPH_SYMBOLS];
+        glyph_current_symbol_set(art);
+        rt_log("menu: hair page hint drawn: page %d, %s, family %d, button %s, glyph %s", page, source == GLYPH_SOURCE_KEYBOARD ? "keyboard" : "pad", family,
+               symbol == SYM_Y ? "Y" : "X", art[symbol] >= 0 ? glyph_art_name((unsigned)art[symbol]) : "native");
+    }
+    float gw = t->image_w > 0 ? (float)t->image_w : 16.f, gh = t->image_h > 0 ? (float)t->image_h : 9.f;
+    float s = std::min((float)t->width / gw, (float)t->height / gh), pw = gw * s, ph = gh * s;
+    float ox = ((float)t->width - pw) / 2, oy = ((float)t->height - ph) / 2;
+    const char *name = page == 2 ? "Story characters" : (page == 0) == (male != 0) ? "Male hairstyles" : "Female hairstyles";
+    char line[96];
+    snprintf(line, sizeof line, "%s  %d / 3", name, page + 1);
+    const char *head = "Change page";
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float u = ph / 1080.f * 1.35f;   // sized with the game picture
+    float u1 = u * 0.78f;
+    ImVec2 ts = ImGui::CalcTextSize(line), hs = ImGui::CalcTextSize(head);
+    float tx = std::max(ts.x * u, hs.x * u1), th = ts.y * u, th1 = hs.y * u1, ic = (th + th1) * 1.15f, pad = th * 0.45f;
+    float gw2 = ic * 0.9f;
+    float w = pad + gw2 + pad + tx + pad, h = ic + pad;
+    ImVec2 p0((float)t->width * 0.012f, (float)t->height * 0.985f - h), p1(p0.x + w, p0.y + h);   // the bottom left corner, under the Modify row
+    dl->AddRectFilled(p0, p1, IM_COL32(6, 14, 22, 205), h * 0.25f);
+    dl->AddRect(p0, p1, IM_COL32(120, 215, 235, 220), h * 0.25f, 0, std::max(1.f, h * 0.04f));
+    hint_glyph(dl, symbol, p0.x + pad + gw2 / 2, p0.y + h / 2, ic * 0.95f);
+    float x = p0.x + pad + gw2 + pad, y0 = p0.y + (h - th - th1) / 2;
+    dl->AddText(nullptr, ImGui::GetFontSize() * u1, ImVec2(x, y0), IM_COL32(150, 215, 232, 255), head);
+    dl->AddText(nullptr, ImGui::GetFontSize() * u, ImVec2(x, y0 + th1), IM_COL32(245, 250, 252, 255), line);
+}
+
 static void perf_draw(const MenuTarget *t, float scale) {
     if (g_perf_mode == 2) return perf_full_draw(t, scale);
     float w = (float)t->width;
@@ -1655,6 +2033,16 @@ static void perf_draw(const MenuTarget *t, float scale) {
     ImVec2 p(w - 12 * scale - sz.x - pad * 2, 12 * scale);   // the top right corner: the game's HUD leaves it empty
     dl->AddRectFilled(p, ImVec2(p.x + sz.x + pad * 2, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 150), 4 * scale);
     dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), g_perf_text);
+}
+
+static bool hint_wanted() {
+    int page, male, source, family, symbol;
+    if (avatar_hair_hint(&page, &male, &source, &family, &symbol)) return true;
+    char lines[48][72];
+    int open = 0, sel = -1;
+    if (avatar_hair_modify_ui(lines, &open, &sel) > 0) return true;   // the Modify window is shown too
+    float pos, len;
+    return avatar_hair_listbar(&pos, &len) != 0;   // and the list's scroll bar
 }
 
 extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const char **shot) {
@@ -1683,7 +2071,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
             g_tab_request = 0;
             set_open(1);
             open = true;
-        } else if (!g_perf_mode) {
+        } else if (!g_perf_mode && !hint_wanted()) {
             return 0;
         }
     }
@@ -1758,6 +2146,27 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
         layout_menu(t->width, t->height, scale);
     }
     perf_draw(t, scale);
+    if (open && !text) corner_draw(t, true);   // the F1 menu does not hide the bottom left panels
+    if (!open && !text) {
+        hint_draw(t, scale);
+        if (const char *tag = avatar_hair_shot_tag()) {   // test hook (XCX_HAIR_MODNAV): this frame, with the overlay on it, under the step's name
+            static char tpath[512];
+            const char *dir = cfg_get("XCX_MENU_TEST_DIR");
+            snprintf(tpath, sizeof tpath, "%s/%s.png", dir ? dir : ".", tag);
+            *shot = tpath;
+        } else if (cfg_get("XCX_HAIR_HINT_SHOT") && hint_wanted()) {   // test hook: a few frames with the page hint on them go to XCX_MENU_TEST_DIR
+            static int n;
+            static uint64_t last;
+            static char hpath[512];
+            if (n < std::max(3, atoi(cfg_get("XCX_HAIR_HINT_SHOT"))) && frame > last + 240) {
+                const char *dir = cfg_get("XCX_MENU_TEST_DIR");
+                snprintf(hpath, sizeof hpath, "%s/hint-shot-%llu.png", dir ? dir : ".", (unsigned long long)frame);
+                *shot = hpath;
+                last = frame;
+                n++;
+            }
+        }
+    }
     ImGui::Render();
     if (open) g_save_pending = opt_save_tick(0);
     g_cost_ns += plat_now_ns() - t0;

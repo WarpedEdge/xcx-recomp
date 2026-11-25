@@ -233,7 +233,55 @@ static void save_shot(const tex_t *t, const char *path) {
 // present), box-filtered to 480x270; XCX_SHOTS=w<lo>-<hi>:<step> takes them by world-clock seconds instead, the first
 // present at or after each step (full size with XCX_SHOTS_FULL=1), for finding short glitches. Pipeline builds stay asynchronous, so the
 // pictures show what a player sees.
+// boot_shot_request: the next present is saved as <XCX_SHOTS_DIR>/<name>.png, cropped to the box (fractions of the picture), at full
+// size. For tests that decide when a picture is wanted (runtime/avatar_hair.c). One request at a time; returns 0 when one is pending.
+static char req_name[128];
+static float req_box[4];
+static volatile int req_pending;
+int boot_shot_request(const char *name, float x0, float y0, float x1, float y1) {
+    if (__atomic_load_n(&req_pending, __ATOMIC_ACQUIRE)) return 0;
+    snprintf(req_name, sizeof req_name, "%s", name);
+    req_box[0] = x0; req_box[1] = y0; req_box[2] = x1; req_box[3] = y1;
+    __atomic_store_n(&req_pending, 1, __ATOMIC_RELEASE);
+    return 1;
+}
+int boot_shot_pending(void) { return __atomic_load_n(&req_pending, __ATOMIC_ACQUIRE); }
+
+static void req_shot(const tex_t *t) {
+    if (!__atomic_load_n(&req_pending, __ATOMIC_ACQUIRE)) return;
+    int fmt = t->d.format;
+    int bgra = fmt == NVN_FORMAT_BGRA8 || fmt == NVN_FORMAT_BGRA8_SRGB;
+    if (!bgra && fmt != NVN_FORMAT_RGBA8 && fmt != NVN_FORMAT_RGBA8_SRGB) { __atomic_store_n(&req_pending, 0, __ATOMIC_RELEASE); return; }
+    uint32_t w = t->d.width, h = t->d.height;
+    uint32_t x0 = (uint32_t)(req_box[0] * (float)w), y0 = (uint32_t)(req_box[1] * (float)h), x1 = (uint32_t)(req_box[2] * (float)w), y1 = (uint32_t)(req_box[3] * (float)h);
+    if (x1 > w) x1 = w;
+    if (y1 > h) y1 = h;
+    if (x1 <= x0 || y1 <= y0) { __atomic_store_n(&req_pending, 0, __ATOMIC_RELEASE); return; }
+    uint8_t *px = malloc(4ull * w * h), *out = malloc(4ull * (x1 - x0) * (y1 - y0));
+    if (!px || !out) { free(px); free(out); __atomic_store_n(&req_pending, 0, __ATOMIC_RELEASE); return; }
+    view_t view;
+    memset(&view, 0, sizeof view);
+    NVNcopyRegion r = {.width = (int)w, .height = (int)h, .depth = 1};
+    if (gfx_replay_async()) gfx_backend()->finish();
+    gfx_backend()->read_texels(t, &view, &r, px, 4ull * w, 4ull * w * h);
+    for (uint32_t y = y0; y < y1; y++)
+        for (uint32_t x = x0; x < x1; x++) {
+            const uint8_t *s = px + 4ull * (y * (uint64_t)w + x);
+            uint8_t *o = out + 4ull * ((y - y0) * (uint64_t)(x1 - x0) + (x - x0));
+            o[0] = s[bgra ? 2 : 0]; o[1] = s[1]; o[2] = s[bgra ? 0 : 2]; o[3] = 255;
+        }
+    const char *dir = cfg_get("XCX_SHOTS_DIR") ? cfg_get("XCX_SHOTS_DIR") : ".";
+    plat_file_mkdir_p(dir);
+    char path[PLAT_PATH_MAX];
+    snprintf(path, sizeof path, "%s/%s.png", dir, req_name);
+    rt_write_png(path, out, x1 - x0, y1 - y0);
+    free(out);
+    free(px);
+    __atomic_store_n(&req_pending, 0, __ATOMIC_RELEASE);
+}
+
 static void series_shot(const tex_t *t, uint64_t n) {
+    req_shot(t);
     static int parsed;
     static unsigned long long lo, hi, step, next;
     static const char *dir;

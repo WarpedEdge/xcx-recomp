@@ -291,6 +291,8 @@ uint64_t frame_step_cap_ns(void);                          // with the real-time
 double frame_step_limit_hz(void);                         // the frame rate the limit gives (overlay); 0 unknown
 int64_t frame_step_world_us(void);                         // game time since the loaded save's first frame, -1 before
                                                            // (XCX_FPS_LIMIT, live)
+int boot_shot_request(const char *name, float x0, float y0, float x1, float y1);   // the next present as <XCX_SHOTS_DIR>/<name>.png, cropped (fractions); 0 if one is pending
+int boot_shot_pending(void);
 uint64_t frame_step_ticks(void);                           // game time since the first present in 60 Hz ticks (input scripts)
 // In-launch A/B measurement: XCX_AB=<seconds> splits the world clock (frame_step_world_us) into blocks of that much
 // game time in the order A B B A (repeated); rt_ab() is 1 in the B blocks, 0 in A blocks, before the world clock and

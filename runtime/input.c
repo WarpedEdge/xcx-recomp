@@ -30,7 +30,7 @@ static int state;                    // 0 not started, 1 running, -1 disabled or
 static GlyphIntent glyph_intent;
 static int glyph_family;
 static GlyphIntentSample glyph_sample;
-static volatile int32_t g_block, g_menu;
+static volatile int32_t g_block, g_menu, g_view;   // g_view: the right stick still reaches the game while g_block holds the rest
 static SDL_Gamepad *pad;
 static uint64_t next_scan;
 static int pad_rumble;               // the open gamepad has rumble motors
@@ -114,6 +114,25 @@ static void script_load(void) {
     }
     fclose(f);
     rt_log("input: script %s, %d events", path, script_n);
+}
+
+// Input pressed by the runtime itself (runtime/avatar_hair.c: the creator's page switch and the hairstyle review): input_inject ORs
+// buttons into the game's input for a number of 60 Hz ticks. input_last_buttons is what the game's last poll returned (stick
+// directions included), for code that reacts to a press without polling.
+static volatile uint64_t inj_bits, inj_until, last_buttons;
+void input_inject(uint64_t bits, uint32_t ticks) {
+    __atomic_store_n(&inj_bits, bits, __ATOMIC_RELAXED);
+    __atomic_store_n(&inj_until, frame_step_ticks() + ticks, __ATOMIC_RELEASE);
+}
+static volatile int32_t inj_rx, inj_ry;
+static volatile uint64_t inj_stick_until;
+void input_inject_rstick(int32_t x, int32_t y, uint32_t ticks) {   // the right stick, for the hairstyle review's turn of the model
+    __atomic_store_n(&inj_rx, x, __ATOMIC_RELAXED); __atomic_store_n(&inj_ry, y, __ATOMIC_RELAXED);
+    __atomic_store_n(&inj_stick_until, frame_step_ticks() + ticks, __ATOMIC_RELEASE);
+}
+uint64_t input_last_buttons(void) { return __atomic_load_n(&last_buttons, __ATOMIC_RELAXED); }
+static void inject_apply(uint64_t *b) {
+    if (frame_step_ticks() < __atomic_load_n(&inj_until, __ATOMIC_ACQUIRE)) *b |= __atomic_load_n(&inj_bits, __ATOMIC_RELAXED);
 }
 
 static void script_apply(uint64_t *b, int32_t sl[2], int32_t sr[2]) {
@@ -443,7 +462,7 @@ static void poll_merged(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx
             pick(&sr[0], &sr[1], k[0], k[1]);
         }
     }
-    glyph_sample.active = state > 0 && ikb_foreground() && !menu_is_open() && !g_block && !g_menu;
+    glyph_sample.active = state > 0 && ikb_foreground() && !menu_is_open() && (!g_block || g_view == 1) && !g_menu;   // g_view: the hair Modify window holds the game's input but is no text entry, so a touch of the keyboard or the pad still changes the glyphs it shows
     glyph_sample.captured = ikb_captured(); glyph_sample.now = plat_now_ns();
     ikb_intent_mouse_take(&glyph_sample.mouse_x, &glyph_sample.mouse_y);
     // Classify the copied pre-merge physical states; scripts cannot select the display source.
@@ -455,6 +474,8 @@ static void poll_merged(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx
                glyph_intent.source == GLYPH_SOURCE_PAD ? "controller" : glyph_intent.source == GLYPH_SOURCE_KEYBOARD ? "keyboard/mouse" : "none",
                glyph_family);
     script_apply(&b, sl, sr);
+    inject_apply(&b);
+    if (frame_step_ticks() < __atomic_load_n(&inj_stick_until, __ATOMIC_ACQUIRE)) { sr[0] = __atomic_load_n(&inj_rx, __ATOMIC_RELAXED); sr[1] = __atomic_load_n(&inj_ry, __ATOMIC_RELAXED); }
     rec_apply(b, sl, sr);
     // L+R+ZL+ZR held for a second ask whether to quit, over the game or the open menu (before the menu's gate, which
     // empties the pad while the menu is open)
@@ -473,6 +494,7 @@ static void poll_merged(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx
     if (quit) menu_quit_prompt();
     stick_bits(&b, sl[0], sl[1], B_SL_LEFT);
     stick_bits(&b, sr[0], sr[1], B_SR_LEFT);
+    __atomic_store_n(&last_buttons, b, __ATOMIC_RELAXED);
     *buttons = b; *lx = sl[0]; *ly = sl[1]; *rx = sr[0]; *ry = sr[1];
 }
 
@@ -483,6 +505,10 @@ static void poll_merged(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx
 int input_cursor_allowed(void) {
     const char *in = cfg_get("XCX_INPUT");
     return g_block != 1 && g_menu != 1 && mouse_sens_get() > 0 && !(in && !strcmp(in, "none"));
+}
+
+void input_block_view(int on) {
+    plat_xchg32(&g_view, on ? 1 : 0);
 }
 
 void input_block(int on) {
@@ -508,7 +534,11 @@ void input_poll(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_
     poll_merged(buttons, lx, ly, rx, ry);
     int text = blocked(&g_block, *buttons), menu = blocked(&g_menu, *buttons);
     if (!text && !menu) return;
+    // The Modify panel (avatar_hair.c) lets the right stick turn the character while it holds everything else.
+    int32_t vx = *rx, vy = *ry;
+    int view = text && !menu && g_view == 1 && g_block == 1;
     *buttons = 0; *lx = *ly = *rx = *ry = 0;
+    if (view) { *rx = vx; *ry = vy; }
 }
 
 void input_poll_ui(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {

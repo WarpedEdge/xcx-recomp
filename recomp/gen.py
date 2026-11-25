@@ -53,6 +53,8 @@ sys.path.insert(0, str(ROOT / 'recomp'))
 import flags  # noqa: E402
 import appendage  # noqa: E402
 import romfs_mods  # noqa: E402
+import avatar_hair  # noqa: E402
+import avatar_beard  # noqa: E402
 import jumptables  # noqa: E402
 import patches  # noqa: E402
 import regs  # noqa: E402
@@ -232,8 +234,10 @@ def partition(est, max_fns, max_bytes, big_fn):
 class Emitter:
     """C for the functions of one module. starts is the set of every function start of the module."""
 
-    def __init__(self, mod, starts, patched=None, reg_locals=regs.LOCALS, callee_saved=True, spins=None, mod_menu_hook=False):
+    def __init__(self, mod, starts, patched=None, reg_locals=regs.LOCALS, callee_saved=True, spins=None, mod_menu_hook=False, avatar_hair_hook=False):
         self.mod_menu_hook = mod_menu_hook and mod.name == "main"
+        self.avatar_hair = avatar_hair_hook and avatar_hair.verified(mod)
+        self.avatar_beard = avatar_hair_hook and avatar_beard.verified(mod)
         self.mod = mod
         self.appendage = appendage.verified(mod)
         self.romfs_mods = romfs_mods.verified(mod)
@@ -465,6 +469,10 @@ class Emitter:
             out = [f'void {fname(entry)}(Cpu *c) {{', f'    FN_ENTER({hx(entry)});']
             if self.appendage and (hook := appendage.entry(mod, entry)):
                 out.append('    ' + hook)
+            if self.avatar_beard and (hook := avatar_beard.entry(mod, entry)):
+                out.append('    ' + hook)
+            if self.avatar_hair and (hook := avatar_hair.entry(mod, entry)):
+                out.append('    ' + hook)
             if fp.used:
                 out.append('    ' + fp.decl())
 
@@ -578,6 +586,8 @@ class Emitter:
                 emit(i, '    ' + op(i, ins.code))
                 if self.romfs_mods and (hook := romfs_mods.after(mod, a)):
                     emit(i, '    ' + hook)   # read and written through the register planner, like the op
+                if self.avatar_hair and (hook := avatar_hair.after(mod, a)):
+                    emit(i, '    ' + hook)
             elif k == 'trap':
                 emit(i, f'    {spill}{fx(i, ins.code)}')
             elif k in ('b', 'bcond'):
@@ -646,6 +656,10 @@ def chunk_text(name, number, emitter, fns):
     hook_header = '#include "appendage_glyph.h"\n' if any('appendage_glyph_' in s for s in body) else ''
     if any('romfs_mod_declines' in s for s in body):
         hook_header += '#include "romfs_mods.h"\n'
+    if any('avatar_beard_' in s for s in body):
+        hook_header += '#include "avatar_beard.h"\n'
+    if any('avatar_hair_' in s for s in body):
+        hook_header += '#include "avatar_hair.h"\n'
     return (header(f'{name} chunk {number:04d}') + '#include "cpu.h"\n#include "simd.h"\n' + hook_header + '\n' + protos + '\n'
             + '\n\n'.join(body) + '\n')
 
@@ -835,8 +849,11 @@ def main():
                     help='reload X19-X29 and SP after every call too, instead of trusting AAPCS64 (slower; for '
                          'telling a broken callee from a generator bug)')
     ap.add_argument("--mod-menu-hook", action="store_true", help="validated XCX 2.0.0 registered Online-child insertion")
+    ap.add_argument('--avatar-hair-hook', action='store_true',
+                    help='validated XCX 2.0.0 extra hairstyles in the character creator (docs/character-creator.md)')
     args = ap.parse_args()
-    opts = {'reg_locals': args.reg_locals, 'callee_saved': not args.no_callee_saved_trust, 'mod_menu_hook': args.mod_menu_hook}
+    opts = {'reg_locals': args.reg_locals, 'callee_saved': not args.no_callee_saved_trust, 'mod_menu_hook': args.mod_menu_hook,
+            'avatar_hair_hook': args.avatar_hair_hook}
 
     t0 = time.perf_counter()
     mods = layout(args.exefs)

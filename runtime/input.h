@@ -10,6 +10,8 @@ void input_poll(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_
 // reports nothing; input_block(0) when it closes: nothing until all buttons and stick directions are released.
 void input_poll_ui(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);
 void input_block(int on);
+// With input_block(1): 1 lets the right stick through to the game (turning the character), 0 blocks it again.
+void input_block_view(int on);
 // The in-game menu (ui/menu.h): input_menu(1) when it opens (input_poll reports nothing, the cursor is released), (0) when
 // it closes (nothing until every button and stick direction is released). Independent of input_block.
 void input_menu(int open);
@@ -25,6 +27,10 @@ int input_overlay_f2(void);   // F2 steps the overlay as F10 does: 1 while no bu
 typedef struct { int held, fired; uint64_t since; } InputQuitHold;
 int input_quit_gate(InputQuitHold *q, uint64_t now_ns, uint64_t *buttons);
 int input_pad_read(uint64_t *buttons, int32_t *lx, int32_t *ly);
+// Buttons (bits above) the runtime presses for the game for ticks 60 Hz ticks; the buttons of the game's last poll. Any thread.
+void input_inject(uint64_t bits, uint32_t ticks);
+void input_inject_rstick(int32_t x, int32_t y, uint32_t ticks);
+uint64_t input_last_buttons(void);
 // The gamepad layout in effect (PAD_LAYOUT_*, input_map.h; XCX_PAD_LAYOUT, live); -1 without a gamepad. Any thread.
 int input_pad_layout(void);
 // The label on a face button of the open gamepad (input_map.h PAD_SOUTH..PAD_NORTH, as SDL reports it); PAD_LABEL_NONE for another
